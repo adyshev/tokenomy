@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Fixed stats persistence for globally installed Tokenomy in projects that do not already have a `.pi` directory.
 - Public-readiness documentation pass.
 - Added installation, configuration, security, contributing, and limitations docs.
 - Expanded integration tests for classifier acceptance/rejection, missing model fallback, and invalid config warnings.
