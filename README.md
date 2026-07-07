@@ -124,7 +124,7 @@ length, context size, images, and task language such as `explain`, `review`,
 The local heuristic assigns:
 
 - a tier: `simple`, `medium`, or `complex`
-- an intent such as `answer`, `read`, `single_edit`, `multi_edit`, `debug`, `architecture`, or `release`
+- an intent such as `answer`, `shell_simple`, `read`, `single_edit`, `multi_edit`, `debug`, `architecture`, or `release`
 - a risk level: `low`, `medium`, or `high`
 - a tool profile: `none`, `read`, or `write`
 - a confidence score

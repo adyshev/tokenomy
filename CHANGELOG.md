@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Fixed simple shell/listing prompts such as `ls -l` routing to the medium tier in large contexts.
 - Reduced duplicate stats writes during digest injection and added regression coverage for corrupted classifier cache handling.
 - Added intent/risk-aware routing, classifier decision caching, adaptive fallback tiers, and compact project digest injection for large/repeated contexts.
 - Changed the default medium model preference to `gpt-5.4` before `gpt-5.4-mini`.

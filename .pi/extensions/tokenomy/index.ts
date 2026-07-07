@@ -16,6 +16,7 @@ type ToolProfile = "none" | "read" | "write";
 type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 type PromptIntent =
   | "answer"
+  | "shell_simple"
   | "read"
   | "single_edit"
   | "multi_edit"
@@ -641,6 +642,13 @@ function hasAny(lower: string, patterns: RegExp[]): boolean {
 
 function classifyIntent(lower: string, toolProfile: ToolProfile): PromptIntent {
   if (
+    hasAny(lower.trim(), [
+      /^(ls|pwd|tree|find|grep|rg|cat|head|tail|wc|du|df)(\s|$)/,
+    ])
+  ) {
+    return "shell_simple";
+  }
+  if (
     hasAny(lower, [
       /\b(release|publish|npm|github actions?|workflow|ci|tag|dist-tag|version bump|merge pr|pull request)\b/,
     ])
@@ -678,6 +686,7 @@ function riskForIntent(
   toolProfile: ToolProfile,
   contextTokens: number | undefined,
 ): RiskLevel {
+  if (intent === "shell_simple") return "low";
   if (intent === "architecture" || intent === "release") return "high";
   if (intent === "debug" || intent === "multi_edit") return "medium";
   if (toolProfile === "write") return "medium";
@@ -766,7 +775,8 @@ function analyzePrompt(
   signals.push(`intent:${intent}`, `risk:${risk}`);
 
   let tier: Tier = score >= 4 ? "complex" : score >= 1 ? "medium" : "simple";
-  if (intent === "release" || intent === "architecture") tier = "complex";
+  if (intent === "shell_simple") tier = "simple";
+  else if (intent === "release" || intent === "architecture") tier = "complex";
   else if (
     tier === "simple" &&
     (intent === "debug" || intent === "multi_edit" || intent === "single_edit")
