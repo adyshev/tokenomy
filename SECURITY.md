@@ -5,15 +5,24 @@ or store API keys.
 
 ## Stored Data
 
-Tokenomy may create `.pi/tokenomy-stats.json` in projects where it runs. This
-file stores local estimated usage counters:
+Tokenomy may create `.pi/tokenomy-stats.json` and `.pi/tokenomy-cache/` in
+projects where it runs. The stats file stores local estimated usage counters:
 
 - lifetime estimated tokens saved
 - routed prompt count
 - Tokenomy session count
+- classifier cache hit count
+- project digest use count
+- adaptive fallback count
+- per-intent route counters
 - last update timestamp
 
-It does not store prompt text, model responses, API keys, or auth headers.
+The classifier cache stores routing decisions keyed by a normalized prompt hash,
+context bucket, intent, and risk. The project digest stores compact routing
+metadata such as intent counts and the last selected tier/model.
+
+Tokenomy does not store raw prompt text, model responses, API keys, or auth
+headers.
 
 ## Model Calls
 

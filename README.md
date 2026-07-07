@@ -108,7 +108,7 @@ Tokenomy considers total token usage, not just model cost:
 
 On startup, Tokenomy selects the configured complex baseline model first
 (`gpt-5.5` by default), then reroutes down to cheaper models when the prompt is
-simple or uncertain enough to use fallback.
+simple or low-risk enough to use fallback.
 
 For simple prompts it prefers the cheapest/fastest configured Codex model, minimal thinking, concise answers, and no tools when tools are unnecessary.
 
@@ -124,6 +124,8 @@ length, context size, images, and task language such as `explain`, `review`,
 The local heuristic assigns:
 
 - a tier: `simple`, `medium`, or `complex`
+- an intent such as `answer`, `read`, `single_edit`, `multi_edit`, `debug`, `architecture`, or `release`
+- a risk level: `low`, `medium`, or `high`
 - a tool profile: `none`, `read`, or `write`
 - a confidence score
 - a list of signals that explain the decision
@@ -135,15 +137,26 @@ to a stronger tier.
 
 For ambiguous prompts, Tokenomy can ask the cheapest configured classifier model
 for a tiny JSON decision. The classifier is only accepted when its confidence is
-at least `classifier.minConfidence`, which is `0.95` by default. If classifier
-confidence is below that threshold, classifier output is unavailable, or the
-local heuristic is below the same confidence threshold, Tokenomy uses fallback:
-the cheapest available configured model.
+at least `classifier.minConfidence`, which is `0.95` by default. Accepted
+classifier decisions are cached locally by normalized prompt, context bucket,
+intent, and risk so repeated routing questions do not keep spending classifier
+tokens.
 
-This fallback policy is deliberate. When Tokenomy cannot confidently justify a
-more expensive model, it prefers not to spend extra tokens. Stronger models are
-used when the prompt clearly needs them or when a high-confidence classifier
-decision selects them.
+If classifier confidence is below that threshold, classifier output is
+unavailable, or the local heuristic is below the same confidence threshold,
+Tokenomy uses fallback. Fallback is risk-aware:
+
+- low-risk uncertainty falls back to the cheapest configured available model
+- medium-risk write/debug work falls back to the medium tier
+- high-risk architecture/release work falls back to the complex tier
+
+This policy keeps cheap fallback for basic uncertainty while avoiding expensive
+retries on risky prompts.
+
+For large or repeated project contexts, Tokenomy can also inject a compact
+project digest from `.pi/tokenomy-cache/project-digest.json`. The digest stores
+routing metadata such as intent counts and last route, not prompt text or model
+responses.
 
 Tokenomy also adjusts thinking level by tier:
 
@@ -166,7 +179,7 @@ Safer defaults for sharing:
 Default Codex model preferences are:
 
 - classifier/simple: `openai-codex/gpt-5.4-mini`
-- medium: `openai-codex/gpt-5.4-mini`
+- medium: `openai-codex/gpt-5.4`
 - complex: `openai-codex/gpt-5.5`
 
 If you want the fallback selection to be smarter than string sorting, Tokenomy uses explicit model-family ranking rather than relying on IDs.
@@ -192,5 +205,6 @@ npm test
 
 The tests use Node's built-in test runner and a mocked Pi runtime. They verify
 that Tokenomy starts on the configured complex baseline model, downshifts for a
-simple prompt, upshifts again for a complex prompt, and uses the cheapest
-fallback model when confidence is below the configured threshold.
+simple prompt, upshifts again for a complex prompt, uses risk-aware fallback,
+reuses classifier cache entries, and injects compact project digests for large
+contexts.

@@ -43,7 +43,7 @@ function createProjectConfig(overrides = {}) {
     models: {
       classifier: ["gpt-5.4-mini"],
       simple: ["gpt-5.4-mini"],
-      medium: ["gpt-5.4-mini", "gpt-5.4"],
+      medium: ["gpt-5.4", "gpt-5.4-mini"],
       complex: ["gpt-5.5", "gpt-5.4"],
     },
     classifier: {
@@ -240,6 +240,104 @@ test("uses the cheapest fallback model when confidence is below threshold", asyn
   );
   assert.equal(stats.routedPrompts, 1);
   assert.equal(stats.sessionsStarted, 1);
+});
+
+test("routes medium coding work to the configured medium model", async () => {
+  const harness = createHarness(createProjectConfig());
+  await startSession(harness);
+
+  await routePrompt(
+    harness,
+    "Add a focused unit test for this helper and update the implementation if needed.",
+  );
+
+  assert.equal(harness.selectedModels.at(-1), "openai-codex/gpt-5.4");
+  assert.equal(harness.thinkingLevels.at(-1), "low");
+  assert.match(
+    harness.notifications.at(-1).message,
+    /Tokenomy: medium via fallback -> openai-codex\/gpt-5\.4, thinking:low/,
+  );
+});
+
+test("uses adaptive complex fallback for risky low-confidence classifier results", async () => {
+  process.env.TOKENOMY_TEST_CLASSIFIER_RESPONSE =
+    '{"tier":"simple","confidence":0.51,"reason":"unsure"}';
+  const harness = createHarness(createProjectConfig(), {
+    classifierAuth: { ok: true, apiKey: "test-key", headers: {}, env: {} },
+  });
+  await startSession(harness);
+
+  await routePrompt(
+    harness,
+    "Please plan the npm release, update GitHub Actions if needed, publish the package, tag the release, and verify the full production flow.",
+  );
+
+  assert.equal(harness.selectedModels.at(-1), "openai-codex/gpt-5.5");
+  assert.equal(harness.thinkingLevels.at(-1), "medium");
+  assert.match(
+    harness.notifications.at(-1).message,
+    /Tokenomy: complex via fallback -> openai-codex\/gpt-5\.5, thinking:medium/,
+  );
+
+  delete process.env.TOKENOMY_TEST_CLASSIFIER_RESPONSE;
+});
+
+test("reuses cached classifier decisions", async () => {
+  process.env.TOKENOMY_TEST_CLASSIFIER_RESPONSE =
+    '{"tier":"complex","confidence":0.97,"reason":"risky design"}';
+  const harness = createHarness(createProjectConfig(), {
+    classifierAuth: { ok: true, apiKey: "test-key", headers: {}, env: {} },
+  });
+  await startSession(harness);
+  const prompt =
+    "Please analyze this project context and decide the best routing approach for future provider support. Keep the answer practical and account for confidence, prompt size, and model availability.";
+
+  await routePrompt(harness, prompt);
+  process.env.TOKENOMY_TEST_CLASSIFIER_RESPONSE =
+    '{"tier":"simple","confidence":0.99,"reason":"changed"}';
+  await routePrompt(harness, prompt);
+
+  assert.match(
+    harness.notifications.at(-1).message,
+    /Tokenomy: complex via classifier-cache -> openai-codex\/gpt-5\.5, thinking:medium/,
+  );
+
+  const stats = JSON.parse(
+    readFileSync(join(harness.ctx.cwd, ".pi/tokenomy-stats.json"), "utf8"),
+  );
+  assert.equal(stats.classifierCacheHits, 1);
+
+  delete process.env.TOKENOMY_TEST_CLASSIFIER_RESPONSE;
+});
+
+test("injects a compact project digest for large contexts", async () => {
+  const cwd = createProjectConfig();
+  mkdirSync(join(cwd, ".pi/tokenomy-cache"), { recursive: true });
+  writeFileSync(
+    join(cwd, ".pi/tokenomy-cache/project-digest.json"),
+    JSON.stringify(
+      {
+        project: "tokenomy-test",
+        updatedAt: new Date().toISOString(),
+        promptsSeen: 3,
+        intentCounts: { read: 3 },
+        lastIntent: "read",
+        lastTier: "simple",
+        lastModel: "openai-codex/gpt-5.4-mini",
+        lastSignals: ["intent:read", "risk:low"],
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  const harness = createHarness(cwd, { contextTokens: 90_000 });
+  await startSession(harness);
+
+  const result = await routePrompt(harness, "Summarize this project structure.");
+
+  assert.match(result.systemPrompt, /Tokenomy compact project digest is active/);
+  assert.match(result.systemPrompt, /Intent counts: read:3/);
 });
 
 test("creates the project .pi directory before saving stats", async () => {
