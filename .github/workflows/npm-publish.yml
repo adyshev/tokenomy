@@ -72,6 +72,12 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --access public --provenance --tag "${{ steps.dist-tag.outputs.tag }}"
 
+      - name: Sync default npm dist tag
+        if: steps.npm-token.outputs.configured == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm dist-tag add "${{ steps.package.outputs.name }}@${{ steps.package.outputs.version }}" latest
+
       - name: Skip missing npm token
         if: steps.published.outputs.exists == 'false' && steps.npm-token.outputs.configured == 'false'
         run: |
