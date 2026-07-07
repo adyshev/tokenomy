@@ -188,3 +188,25 @@ level, or active tools.
 
 When enabled, Tokenomy appends short system guidance to reduce unnecessary
 tokens and tool calls.
+
+## Prompt Simplification
+
+```json
+{
+  "promptSimplification": {
+    "enabled": true,
+    "maxClassifierPromptChars": 1600,
+    "maxLineChars": 240,
+    "headLines": 16,
+    "tailLines": 16,
+    "preserveSignalLines": 40
+  }
+}
+```
+
+When enabled, Tokenomy locally simplifies large prompts before sending them to
+the cheap classifier model. The original prompt still goes to the selected agent
+model; simplification is only for routing/classification. It preserves head and
+tail context plus signal lines containing errors, failures, test names, file
+paths, and counts. Tokenomy also adds system guidance asking the agent to
+condense long command output before reasoning.

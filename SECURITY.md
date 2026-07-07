@@ -30,6 +30,10 @@ The local heuristic uses no model tokens. If the classifier is enabled,
 Tokenomy may send an ambiguous prompt excerpt to the configured classifier model
 through Pi's authenticated provider.
 
+For large prompts, Tokenomy can simplify the classifier excerpt locally before
+the classifier call. This reduces prompt size but may still include relevant
+error lines, file paths, and counts from the user's prompt.
+
 Set this to disable classifier calls:
 
 ```json

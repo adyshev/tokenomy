@@ -81,6 +81,14 @@ interface TokenomyConfig {
     enabled: boolean;
     maxAnswerBulletsSimple: number;
   };
+  promptSimplification: {
+    enabled: boolean;
+    maxClassifierPromptChars: number;
+    maxLineChars: number;
+    headLines: number;
+    tailLines: number;
+    preserveSignalLines: number;
+  };
   ui: {
     status: boolean;
     notifyDecisions: boolean;
@@ -229,6 +237,14 @@ const DEFAULT_CONFIG: TokenomyConfig = {
   promptDiscipline: {
     enabled: true,
     maxAnswerBulletsSimple: 5,
+  },
+  promptSimplification: {
+    enabled: true,
+    maxClassifierPromptChars: 1600,
+    maxLineChars: 240,
+    headLines: 16,
+    tailLines: 16,
+    preserveSignalLines: 40,
   },
   ui: {
     status: true,
@@ -608,6 +624,20 @@ function validateConfig(config: TokenomyConfig): string[] {
   ) {
     warnings.push("distillation.maxDigestChars must be at least 200");
   }
+  if (
+    typeof config.promptSimplification.maxClassifierPromptChars !== "number" ||
+    config.promptSimplification.maxClassifierPromptChars < 400
+  ) {
+    warnings.push(
+      "promptSimplification.maxClassifierPromptChars must be at least 400",
+    );
+  }
+  if (
+    typeof config.promptSimplification.maxLineChars !== "number" ||
+    config.promptSimplification.maxLineChars < 80
+  ) {
+    warnings.push("promptSimplification.maxLineChars must be at least 80");
+  }
   return warnings;
 }
 
@@ -636,8 +666,80 @@ function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
+function truncateLine(line: string, maxChars: number): string {
+  if (line.length <= maxChars) return line;
+  return `${line.slice(0, Math.max(0, maxChars - 24))} ... [truncated line]`;
+}
+
 function hasAny(lower: string, patterns: RegExp[]): boolean {
   return patterns.some((pattern) => pattern.test(lower));
+}
+
+function isSignalLine(line: string): boolean {
+  return hasAny(line.toLowerCase(), [
+    /\b(error|fail|failed|failure|exception|traceback|stack trace|warning|warn|fatal|panic|assert|expected|actual)\b/,
+    /\b(test|spec|suite|passed|skipped|todo|duration|exit code)\b/,
+    /(^|\s)(src|lib|app|test|tests|packages|\.pi|\.github|scripts)\/[\w./-]+(:\d+)?/,
+    /\b[a-z0-9_.-]+\.(ts|tsx|js|jsx|mjs|cjs|json|md|py|rs|go|rb|java|kt|yml|yaml|toml|lock)(:\d+)?\b/,
+  ]);
+}
+
+function uniqueLines(lines: string[]): string[] {
+  const seen = new Set<string>();
+  return lines.filter((line) => {
+    const key = line.trim();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function simplifyPromptForClassifier(
+  prompt: string,
+  config: TokenomyConfig,
+): { text: string; simplified: boolean } {
+  if (!config.promptSimplification.enabled) {
+    return {
+      text: prompt.slice(0, config.classifier.maxPromptChars),
+      simplified: false,
+    };
+  }
+  if (prompt.length <= config.promptSimplification.maxClassifierPromptChars) {
+    return { text: prompt, simplified: false };
+  }
+
+  const lines = prompt
+    .split(/\r?\n/)
+    .map((line) =>
+      truncateLine(line.trimEnd(), config.promptSimplification.maxLineChars),
+    );
+  const head = lines.slice(0, config.promptSimplification.headLines);
+  const tail = lines.slice(-config.promptSimplification.tailLines);
+  const signal = uniqueLines(lines.filter(isSignalLine)).slice(
+    0,
+    config.promptSimplification.preserveSignalLines,
+  );
+  const simplified = [
+    "[Tokenomy simplified prompt for routing/classification]",
+    `Original chars: ${prompt.length}`,
+    "",
+    "Head:",
+    ...head,
+    "",
+    "Signal lines:",
+    ...(signal.length ? signal : ["none"]),
+    "",
+    "Tail:",
+    ...tail,
+  ].join("\n");
+
+  return {
+    text: simplified.slice(
+      0,
+      config.promptSimplification.maxClassifierPromptChars,
+    ),
+    simplified: true,
+  };
 }
 
 function classifyIntent(lower: string, toolProfile: ToolProfile): PromptIntent {
@@ -895,7 +997,9 @@ function buildClassifierPrompt(
   prompt: string,
   contextTokens: number | undefined,
   analysis: LocalAnalysis,
+  config: TokenomyConfig,
 ): string {
+  const classifierPrompt = simplifyPromptForClassifier(prompt, config);
   return [
     "You are a token-economy router for a coding agent.",
     "Goal: minimize TOTAL token usage while preserving high-quality output.",
@@ -909,9 +1013,10 @@ function buildClassifierPrompt(
     `Local signals: ${analysis.signals.join(",") || "none"}`,
     `Current context tokens: ${contextTokens ?? "unknown"}`,
     `Prompt chars: ${prompt.length}`,
+    `Prompt simplified: ${classifierPrompt.simplified ? "yes" : "no"}`,
     "",
     "User prompt:",
-    prompt.slice(0, 4000),
+    classifierPrompt.text,
   ].join("\n");
 }
 
@@ -981,7 +1086,12 @@ async function classifyWithCheapModel(
           content: [
             {
               type: "text" as const,
-              text: buildClassifierPrompt(prompt, contextTokens, analysis),
+              text: buildClassifierPrompt(
+                prompt,
+                contextTokens,
+                analysis,
+                config,
+              ),
             },
           ],
           timestamp: Date.now(),
@@ -1188,6 +1298,11 @@ function buildTokenDiscipline(
   if ((contextTokens ?? 0) >= config.thresholds.largeContextTokens) {
     common.push(
       "Context is large: rely on the most relevant recent facts and avoid re-reading broad context unless necessary.",
+    );
+  }
+  if (config.promptSimplification.enabled) {
+    common.push(
+      "When command output is long, locally condense it before reasoning: preserve errors, failed tests, file paths, counts, and the first/last relevant lines; avoid repeating full logs unless requested.",
     );
   }
 
@@ -1559,6 +1674,7 @@ export default function tokenomy(pi: ExtensionAPI) {
         `Version: ${packageVersion()}`,
         `Provider: ${config.provider}`,
         `Classifier: ${config.classifier.enabled ? "enabled" : "disabled"} (${config.classifier.onlyWhenAmbiguous ? "ambiguous only" : "all eligible"})`,
+        `Prompt simplification: ${config.promptSimplification.enabled ? "enabled" : "disabled"}`,
         `Tool management: ${config.tools.manage ? "enabled" : "disabled"}`,
         `Last decision: ${lastDecision ? `${lastDecision.tier} via ${lastDecision.source}, model=${lastDecision.model ?? "none"}, thinking=${lastDecision.thinking}, reason=${lastDecision.reason}` : "none"}`,
         `Estimated tokens saved this session: ${estimatedTokensSaved}`,
