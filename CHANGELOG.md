@@ -8,6 +8,7 @@
 - Added Pi package manifest support for `pi install`.
 - Added GitHub Actions CI for JSON validation and integration tests.
 - Added npm package metadata and automated npm publish workflow.
+- Added manual npm publish workflow dispatch and graceful skip when `NPM_TOKEN` is not configured.
 
 ## 0.1.0-beta - 2026-07-07
 - Added config validation and warnings for invalid/empty model lists.
