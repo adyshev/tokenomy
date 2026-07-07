@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -231,6 +237,27 @@ test("uses the cheapest fallback model when confidence is below threshold", asyn
   );
   assert.equal(stats.routedPrompts, 1);
   assert.equal(stats.sessionsStarted, 1);
+});
+
+test("creates the project .pi directory before saving stats", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "tokenomy-no-pi-"));
+  const harness = createHarness(cwd);
+
+  await startSession(harness);
+  await routePrompt(harness, "Help with the project.");
+
+  const statsFile = join(cwd, ".pi/tokenomy-stats.json");
+  assert.equal(existsSync(statsFile), true);
+
+  const stats = JSON.parse(readFileSync(statsFile, "utf8"));
+  assert.equal(stats.routedPrompts, 1);
+  assert.equal(stats.sessionsStarted, 1);
+  assert.equal(
+    harness.notifications.some(({ message }) =>
+      message.includes("stats warning"),
+    ),
+    false,
+  );
 });
 
 test("accepts a high-confidence classifier decision", async () => {

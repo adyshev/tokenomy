@@ -1,5 +1,5 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { complete, type Api, type Model } from "@earendil-works/pi-ai/compat";
 import type {
   ExtensionAPI,
@@ -205,7 +205,9 @@ function saveStats(cwd: string, stats: TokenomyStats): void {
     ...stats,
     updatedAt: new Date().toISOString(),
   };
-  writeFileSync(statsPath(cwd), `${JSON.stringify(next, null, 2)}\n`, "utf8");
+  const path = statsPath(cwd);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`, "utf8");
 }
 
 function validateConfig(config: TokenomyConfig): string[] {
