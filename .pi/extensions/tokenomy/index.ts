@@ -370,6 +370,8 @@ function classifierCacheKey(
   analysis: LocalAnalysis,
   config: TokenomyConfig,
 ): string {
+  // Hash the normalized prompt so project-local cache files never store raw
+  // prompt text while still reusing equivalent classifier decisions.
   return hashText(
     [
       normalizedPrompt(prompt),
@@ -1007,6 +1009,8 @@ function fallbackTierFor(
   stats: TokenomyStats,
 ): Tier {
   if (!config.adaptive.enabled) return "simple";
+  // Low-risk uncertainty stays cheap; risky uncertainty moves up because a bad
+  // cheap attempt can cost more total tokens through retries and corrections.
   if (config.adaptive.complexFallbackIntents.includes(analysis.intent)) {
     return "complex";
   }
@@ -1068,6 +1072,8 @@ function buildProjectDigestPrompt(
   digest: ProjectDigest,
   config: TokenomyConfig,
 ): string {
+  // Keep the digest metadata-only. It compresses routing history without
+  // persisting or reinjecting raw prompts, model responses, or file contents.
   const lines = [
     "Tokenomy compact project digest is active.",
     `Project: ${digest.project}`,
@@ -1380,10 +1386,24 @@ export default function tokenomy(pi: ExtensionAPI) {
     if (!config.debug.dryRun) pi.setThinkingLevel(thinking);
     lastDecision = decision;
 
-    const baselineScore = baselineModel ? modelFamilyRank(baselineModel.split("/").pop() ?? baselineModel) : 0;
+    const baselineScore = baselineModel
+      ? modelFamilyRank(baselineModel.split("/").pop() ?? baselineModel)
+      : 0;
     const targetScore = target ? modelFamilyRank(target.id) : baselineScore;
-    const promptSavings = Math.max(0, baselineScore - targetScore) * Math.ceil((contextTokens ?? event.prompt.length) / 4000) * 50;
+    const promptSavings =
+      Math.max(0, baselineScore - targetScore) *
+      Math.ceil((contextTokens ?? event.prompt.length) / 4000) *
+      50;
     estimatedTokensSaved += promptSavings;
+    const digest = safeLoadProjectDigest(ctx.cwd);
+    const digestPrompt = shouldUseProjectDigest(
+      digest,
+      analysis,
+      contextTokens,
+      config,
+    )
+      ? buildProjectDigestPrompt(digest!, config)
+      : "";
     if (!config.debug.dryRun) {
       if (!statsSessionRecorded) {
         stats.sessionsStarted += 1;
@@ -1391,6 +1411,7 @@ export default function tokenomy(pi: ExtensionAPI) {
       }
       stats.lifetimeEstimatedTokensSaved += promptSavings;
       stats.routedPrompts += 1;
+      if (digestPrompt) stats.projectDigestUses += 1;
       updateIntentStats(stats, analysis, decision);
       try {
         saveStats(ctx.cwd, stats);
@@ -1405,7 +1426,10 @@ export default function tokenomy(pi: ExtensionAPI) {
     if (config.ui.status && ctx.hasUI) {
       const confidenceText =
         confidence === undefined ? "" : `/${Math.round(confidence * 100)}%`;
-      ctx.ui.setStatus("tokenomy", `${tier}:${source}${confidenceText} saved:${estimatedTokensSaved} lifetime:${stats.lifetimeEstimatedTokensSaved}`);
+      ctx.ui.setStatus(
+        "tokenomy",
+        `${tier}:${source}${confidenceText} saved:${estimatedTokensSaved} lifetime:${stats.lifetimeEstimatedTokensSaved}`,
+      );
     }
     if (config.ui.notifyDecisions && ctx.hasUI) {
       ctx.ui.notify(
@@ -1414,24 +1438,6 @@ export default function tokenomy(pi: ExtensionAPI) {
       );
     }
 
-    const digest = safeLoadProjectDigest(ctx.cwd);
-    const digestPrompt = shouldUseProjectDigest(
-      digest,
-      analysis,
-      contextTokens,
-      config,
-    )
-      ? buildProjectDigestPrompt(digest!, config)
-      : "";
-    if (digestPrompt && !config.debug.dryRun) {
-      stats.projectDigestUses += 1;
-      try {
-        saveStats(ctx.cwd, stats);
-        statsWarning = undefined;
-      } catch (error) {
-        statsWarning = `failed to save Tokenomy stats: ${error instanceof Error ? error.message : String(error)}`;
-      }
-    }
     if (!config.debug.dryRun) {
       try {
         updateProjectDigest(ctx.cwd, analysis, decision, config);
@@ -1440,10 +1446,17 @@ export default function tokenomy(pi: ExtensionAPI) {
       }
     }
 
-    const discipline = buildTokenDiscipline(decision, contextTokens, config, estimatedTokensSaved);
+    const discipline = buildTokenDiscipline(
+      decision,
+      contextTokens,
+      config,
+      estimatedTokensSaved,
+    );
     const additions = [digestPrompt, discipline].filter(Boolean);
     if (!additions.length) return;
-    return { systemPrompt: `${event.systemPrompt}\n\n${additions.join("\n\n")}` };
+    return {
+      systemPrompt: `${event.systemPrompt}\n\n${additions.join("\n\n")}`,
+    };
   });
 
   pi.registerCommand("tokenomy", {

@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Reduced duplicate stats writes during digest injection and added regression coverage for corrupted classifier cache handling.
 - Added intent/risk-aware routing, classifier decision caching, adaptive fallback tiers, and compact project digest injection for large/repeated contexts.
 - Changed the default medium model preference to `gpt-5.4` before `gpt-5.4-mini`.
 - Added the installed Tokenomy package version to `/tokenomy status`.

@@ -310,6 +310,35 @@ test("reuses cached classifier decisions", async () => {
   delete process.env.TOKENOMY_TEST_CLASSIFIER_RESPONSE;
 });
 
+test("ignores corrupted classifier cache and still routes", async () => {
+  process.env.TOKENOMY_TEST_CLASSIFIER_RESPONSE =
+    '{"tier":"complex","confidence":0.97,"reason":"risky design"}';
+  const cwd = createProjectConfig();
+  mkdirSync(join(cwd, ".pi/tokenomy-cache"), { recursive: true });
+  writeFileSync(
+    join(cwd, ".pi/tokenomy-cache/classifier-cache.json"),
+    "{bad json",
+    "utf8",
+  );
+  const harness = createHarness(cwd, {
+    classifierAuth: { ok: true, apiKey: "test-key", headers: {}, env: {} },
+  });
+  await startSession(harness);
+
+  await routePrompt(
+    harness,
+    "Please analyze this project context and decide the best routing approach for future provider support. Keep the answer practical and account for confidence, prompt size, and model availability.",
+  );
+
+  assert.equal(harness.selectedModels.at(-1), "openai-codex/gpt-5.5");
+  assert.match(
+    harness.notifications.at(-1).message,
+    /Tokenomy: complex via classifier -> openai-codex\/gpt-5\.5, thinking:medium/,
+  );
+
+  delete process.env.TOKENOMY_TEST_CLASSIFIER_RESPONSE;
+});
+
 test("injects a compact project digest for large contexts", async () => {
   const cwd = createProjectConfig();
   mkdirSync(join(cwd, ".pi/tokenomy-cache"), { recursive: true });
@@ -338,6 +367,11 @@ test("injects a compact project digest for large contexts", async () => {
 
   assert.match(result.systemPrompt, /Tokenomy compact project digest is active/);
   assert.match(result.systemPrompt, /Intent counts: read:3/);
+
+  const stats = JSON.parse(
+    readFileSync(join(harness.ctx.cwd, ".pi/tokenomy-stats.json"), "utf8"),
+  );
+  assert.equal(stats.projectDigestUses, 1);
 });
 
 test("creates the project .pi directory before saving stats", async () => {
