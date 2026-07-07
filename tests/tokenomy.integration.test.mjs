@@ -1,0 +1,218 @@
+import assert from "node:assert/strict";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+
+import tokenomy from "../.pi/extensions/tokenomy/index.ts";
+
+const MODELS = [
+  { provider: "openai-codex", id: "gpt-5.4" },
+  { provider: "openai-codex", id: "gpt-5.4-mini" },
+  { provider: "openai-codex", id: "gpt-5.5" },
+];
+
+function modelLabel(model) {
+  return `${model.provider}/${model.id}`;
+}
+
+function createProjectConfig() {
+  const cwd = mkdtempSync(join(tmpdir(), "tokenomy-test-"));
+  mkdirSync(join(cwd, ".pi"), { recursive: true });
+  writeFileSync(
+    join(cwd, ".pi/tokenomy.json"),
+    `${JSON.stringify(
+      {
+        enabled: true,
+        provider: "openai-codex",
+        models: {
+          classifier: ["gpt-5.4-mini"],
+          simple: ["gpt-5.4-mini"],
+          medium: ["gpt-5.4-mini", "gpt-5.4"],
+          complex: ["gpt-5.5", "gpt-5.4"],
+        },
+        classifier: {
+          enabled: true,
+          onlyWhenAmbiguous: true,
+          maxPromptChars: 4000,
+          maxEstimatedClassifierTokens: 1400,
+          minConfidence: 0.95,
+        },
+        ui: {
+          status: true,
+          notifyDecisions: true,
+        },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+  return cwd;
+}
+
+function createHarness(cwd) {
+  const handlers = new Map();
+  const flags = new Map();
+  const selectedModels = [];
+  const thinkingLevels = [];
+  const notifications = [];
+  const statuses = new Map();
+
+  const ctx = {
+    cwd,
+    model: undefined,
+    signal: new AbortController().signal,
+    hasUI: true,
+    getContextUsage: () => ({ tokens: 12_000 }),
+    modelRegistry: {
+      find(provider, id) {
+        return MODELS.find(
+          (model) => model.provider === provider && model.id === id,
+        );
+      },
+      getAvailable() {
+        return MODELS;
+      },
+      async getApiKeyAndHeaders() {
+        throw new Error("Classifier should not be called in integration tests");
+      },
+    },
+    ui: {
+      setStatus(key, value) {
+        statuses.set(key, value);
+      },
+      notify(message, type) {
+        notifications.push({ message, type });
+      },
+    },
+  };
+
+  let activeTools = [];
+  const pi = {
+    registerFlag(name, options) {
+      flags.set(name, options.default);
+    },
+    getFlag(name) {
+      return flags.get(name);
+    },
+    on(name, handler) {
+      handlers.set(name, handler);
+    },
+    async setModel(model) {
+      ctx.model = model;
+      selectedModels.push(modelLabel(model));
+      return true;
+    },
+    setThinkingLevel(level) {
+      thinkingLevels.push(level);
+    },
+    getAllTools() {
+      return [
+        "read",
+        "grep",
+        "find",
+        "ls",
+        "edit",
+        "write",
+        "bash",
+      ].map((name) => ({ name }));
+    },
+    getActiveTools() {
+      return activeTools;
+    },
+    setActiveTools(next) {
+      activeTools = next;
+    },
+    registerCommand() {},
+  };
+
+  tokenomy(pi);
+
+  return {
+    ctx,
+    handlers,
+    notifications,
+    selectedModels,
+    statuses,
+    thinkingLevels,
+  };
+}
+
+async function startSession(harness) {
+  await harness.handlers.get("session_start")({}, harness.ctx);
+}
+
+async function routePrompt(harness, prompt) {
+  return harness.handlers.get("before_agent_start")(
+    {
+      prompt,
+      systemPrompt: "Base system prompt.",
+    },
+    harness.ctx,
+  );
+}
+
+test("starts on the configured complex baseline model", async () => {
+  const harness = createHarness(createProjectConfig());
+
+  await startSession(harness);
+
+  assert.equal(harness.selectedModels.at(-1), "openai-codex/gpt-5.5");
+  assert.equal(harness.statuses.get("tokenomy"), "tokenomy:on");
+});
+
+test("switches down for simple prompts and back up for complex prompts", async () => {
+  const harness = createHarness(createProjectConfig());
+  await startSession(harness);
+
+  await routePrompt(
+    harness,
+    [
+      "Please respond with a concise overview of Tokenomy routing behavior for",
+      "a teammate who wants a quick orientation. Keep it practical and avoid",
+      "deep implementation details. Mention that it chooses model tiers based",
+      "on prompt complexity and confidence without inspecting files or editing",
+      "anything. Use plain language and keep the answer short.",
+    ].join(" "),
+  );
+
+  assert.equal(harness.selectedModels.at(-1), "openai-codex/gpt-5.4-mini");
+  assert.equal(harness.thinkingLevels.at(-1), "minimal");
+  assert.match(
+    harness.notifications.at(-1).message,
+    /Tokenomy: simple via local -> openai-codex\/gpt-5\.4-mini, thinking:minimal/,
+  );
+
+  await routePrompt(
+    harness,
+    "Refactor the architecture to improve security and performance, implement tests, debug any failing behavior, and patch the extension.",
+  );
+
+  assert.equal(harness.selectedModels.at(-1), "openai-codex/gpt-5.5");
+  assert.equal(harness.thinkingLevels.at(-1), "medium");
+  assert.match(
+    harness.notifications.at(-1).message,
+    /Tokenomy: complex via local -> openai-codex\/gpt-5\.5, thinking:medium/,
+  );
+});
+
+test("uses the cheapest fallback model when confidence is below threshold", async () => {
+  const harness = createHarness(createProjectConfig());
+  await startSession(harness);
+
+  await routePrompt(harness, "Help with the project.");
+
+  assert.equal(harness.selectedModels.at(-1), "openai-codex/gpt-5.4-mini");
+  assert.equal(harness.thinkingLevels.at(-1), "minimal");
+  assert.match(
+    harness.notifications.at(-1).message,
+    /Tokenomy: simple via fallback -> openai-codex\/gpt-5\.4-mini, thinking:minimal/,
+  );
+
+  const stats = JSON.parse(
+    readFileSync(join(harness.ctx.cwd, ".pi/tokenomy-stats.json"), "utf8"),
+  );
+  assert.equal(stats.routedPrompts, 1);
+  assert.equal(stats.sessionsStarted, 1);
+});

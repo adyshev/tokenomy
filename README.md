@@ -152,3 +152,16 @@ pi --list-models | grep openai-codex
 Then update `.pi/tokenomy.json`.
 
 For public sharing, review `COMPATIBILITY.md` and `CHANGELOG.md`.
+
+## Tests
+
+Run the integration tests with:
+
+```bash
+npm test
+```
+
+The tests use Node's built-in test runner and a mocked Pi runtime. They verify
+that Tokenomy starts on the configured complex baseline model, downshifts for a
+simple prompt, upshifts again for a complex prompt, and uses the cheapest
+fallback model when confidence is below the configured threshold.

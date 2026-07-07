@@ -867,7 +867,7 @@ export default function tokenomy(pi: ExtensionAPI) {
     }
     if (config.ui.notifyDecisions && ctx.hasUI) {
       ctx.ui.notify(
-        `Tokenomy: ${tier} via ${source} → ${decision.model ?? "current model"}, thinking:${thinking}`,
+        `Tokenomy: ${tier} via ${source} -> ${decision.model ?? "current model"}, thinking:${thinking}`,
         "info",
       );
     }
