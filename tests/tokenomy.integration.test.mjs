@@ -12,6 +12,15 @@ const MODELS = [
   { provider: "openai-codex", id: "gpt-5.5" },
 ];
 
+test("package manifest declares Tokenomy as an installable Pi extension", () => {
+  const manifest = JSON.parse(readFileSync("package.json", "utf8"));
+
+  assert.ok(manifest.keywords.includes("pi-package"));
+  assert.deepEqual(manifest.pi.extensions, [
+    ".pi/extensions/tokenomy/index.ts",
+  ]);
+});
+
 function modelLabel(model) {
   return `${model.provider}/${model.id}`;
 }

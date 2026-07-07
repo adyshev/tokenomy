@@ -40,9 +40,19 @@ and configuration in this repo assume Codex models available to Plus/Pro users.
 
 ## Usage
 
-See `INSTALL.md` for full setup steps. The short version is: copy the extension
-and config into a project, register it in `.pi/settings.json`, authenticate
-Codex in Pi, and start Pi from that project.
+See `INSTALL.md` for full setup steps. The short version is:
+
+```bash
+pi install git:git@github.com:adyshev/tokenomy
+```
+
+For project-local install:
+
+```bash
+pi install -l git:git@github.com:adyshev/tokenomy
+```
+
+Then authenticate Codex in Pi and start Pi from the target project.
 
 Start Pi in this directory:
 

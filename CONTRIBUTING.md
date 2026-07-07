@@ -20,10 +20,18 @@ npm test
 The tests use Node's built-in test runner and a mocked Pi runtime. They do not
 make real model calls.
 
-If Pi is installed somewhere other than the default locations, set:
+GitHub Actions runs JSON validation and `npm test` on every push and pull
+request targeting `main`.
+
+The test loader shims Pi imports, so CI does not need a real Pi install.
+
+Check that the repository is installable as a Pi package from a local checkout:
 
 ```bash
-PI_CODING_AGENT_PACKAGE_DIR=/path/to/@earendil-works/pi-coding-agent npm test
+tmpdir=$(mktemp -d)
+cd "$tmpdir"
+pi install -l /path/to/tokenomy
+pi list
 ```
 
 ## Change Guidelines

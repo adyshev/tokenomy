@@ -1,8 +1,6 @@
 # Installation
 
-Tokenomy is currently distributed as a project-local Pi extension. It is not an
-npm package. Install it by copying the extension and config into the project
-where you run Pi.
+Tokenomy is distributed as a Pi package. Install it from git with `pi install`.
 
 ## Requirements
 
@@ -11,26 +9,75 @@ where you run Pi.
 - ChatGPT Plus/Pro Codex access authenticated in Pi
 - `openai-codex` models available in `pi --list-models openai-codex`
 
-## Install in a Project
+## Install with Pi
 
-From the project where you want Tokenomy enabled:
+For the current private repository, use SSH access:
+
+```bash
+pi install git:git@github.com:adyshev/tokenomy
+```
+
+Install project-locally instead of globally:
+
+```bash
+pi install -l git:git@github.com:adyshev/tokenomy
+```
+
+After the repository becomes public, HTTPS install should also work:
+
+```bash
+pi install https://github.com/adyshev/tokenomy
+```
+
+For a pinned release or commit:
+
+```bash
+pi install git:git@github.com:adyshev/tokenomy@v0.1.0-beta
+```
+
+`pi install` reads the `pi` manifest from `package.json` and enables the
+Tokenomy extension declared there.
+
+## Project Config
+
+Tokenomy works with built-in defaults after package install. Add
+`.pi/tokenomy.json` only when you want to customize model IDs, UI settings,
+classifier behavior, or tool management.
+
+Example project config:
+
+```json
+{
+  "provider": "openai-codex",
+  "ui": {
+    "notifyDecisions": true
+  }
+}
+```
+
+See `CONFIG.md` for all options.
+
+## Manual Development Install
+
+For local development, you can install from a checked-out path:
+
+```bash
+pi install ./path/to/tokenomy
+```
+
+Or load it for one run without adding it to settings:
+
+```bash
+pi -e ./path/to/tokenomy
+```
+
+Manual copy still works, but `pi install` is preferred:
 
 ```bash
 mkdir -p .pi/extensions/tokenomy
 cp /path/to/tokenomy/.pi/extensions/tokenomy/index.ts .pi/extensions/tokenomy/index.ts
 cp /path/to/tokenomy/.pi/tokenomy.json .pi/tokenomy.json
 ```
-
-Then add the extension to `.pi/settings.json`:
-
-```json
-{
-  "extensions": ["extensions/tokenomy/index.ts"]
-}
-```
-
-If `.pi/settings.json` already exists, merge the `extensions` entry instead of
-overwriting the file.
 
 ## Verify
 
@@ -97,11 +144,11 @@ Disable by config:
 
 ## Update
 
-Copy the new extension file and config from the Tokenomy repo:
+Update installed Pi packages:
 
 ```bash
-cp /path/to/tokenomy/.pi/extensions/tokenomy/index.ts .pi/extensions/tokenomy/index.ts
+pi update --extensions
 ```
 
-Review `.pi/tokenomy.json` before replacing a local config, because users often
-customize model IDs and UI settings.
+Pinned git installs do not move automatically. To move a pinned install, run
+`pi install` again with the new tag or commit.

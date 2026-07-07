@@ -5,11 +5,28 @@
   "private": true,
   "license": "MIT",
   "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "codex",
+    "routing",
+    "token-economy"
+  ],
   "engines": {
     "node": ">=22.19.0"
   },
   "scripts": {
     "test": "node --experimental-strip-types --loader ./tests/pi-extension-loader.mjs --test tests/*.test.mjs",
+    "json:check": "node -e \"for (const f of ['.pi/tokenomy.json','.pi/settings.json','package.json']) JSON.parse(require('fs').readFileSync(f,'utf8')); console.log('json ok')\"",
     "pi:check": "pi --offline --approve --no-session --list-models openai-codex"
+  },
+  "pi": {
+    "extensions": [
+      ".pi/extensions/tokenomy/index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
   }
 }

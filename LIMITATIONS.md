@@ -35,9 +35,8 @@ pi --list-models openai-codex
 
 ## Installation Model
 
-Tokenomy is currently a project-local Pi extension, not a packaged Pi plugin or
-npm package. Users must copy the extension and config into each project where
-they want routing enabled.
+Tokenomy can be installed as a Pi package from git. It is not published as an
+npm package yet, and project-specific config still lives in `.pi/tokenomy.json`.
 
 ## Test Environment
 
