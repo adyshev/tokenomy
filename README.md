@@ -43,13 +43,13 @@ and configuration in this repo assume Codex models available to Plus/Pro users.
 See `INSTALL.md` for full setup steps. The short version is:
 
 ```bash
-pi install git:git@github.com:adyshev/tokenomy
+pi install https://github.com/adyshev/tokenomy
 ```
 
 For project-local install:
 
 ```bash
-pi install -l git:git@github.com:adyshev/tokenomy
+pi install -l https://github.com/adyshev/tokenomy
 ```
 
 Then authenticate Codex in Pi and start Pi from the target project.

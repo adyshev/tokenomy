@@ -11,28 +11,28 @@ Tokenomy is distributed as a Pi package. Install it from git with `pi install`.
 
 ## Install with Pi
 
-For the current private repository, use SSH access:
-
-```bash
-pi install git:git@github.com:adyshev/tokenomy
-```
-
-Install project-locally instead of globally:
-
-```bash
-pi install -l git:git@github.com:adyshev/tokenomy
-```
-
-After the repository becomes public, HTTPS install should also work:
+Recommended public install:
 
 ```bash
 pi install https://github.com/adyshev/tokenomy
 ```
 
+Install project-locally instead of globally:
+
+```bash
+pi install -l https://github.com/adyshev/tokenomy
+```
+
+SSH install also works if you prefer GitHub SSH auth:
+
+```bash
+pi install git:git@github.com:adyshev/tokenomy
+```
+
 For a pinned release or commit:
 
 ```bash
-pi install git:git@github.com:adyshev/tokenomy@v0.1.0-beta
+pi install https://github.com/adyshev/tokenomy@v0.1.0-beta
 ```
 
 `pi install` reads the `pi` manifest from `package.json` and enables the

@@ -1,8 +1,7 @@
 {
   "name": "tokenomy",
-  "version": "0.1.0",
+  "version": "0.1.0-beta",
   "description": "Project-local Pi extension that routes Codex prompts by complexity and confidence.",
-  "private": true,
   "license": "MIT",
   "type": "module",
   "keywords": [
@@ -28,5 +27,16 @@
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/adyshev/tokenomy.git"
+  },
+  "bugs": {
+    "url": "https://github.com/adyshev/tokenomy/issues"
+  },
+  "homepage": "https://github.com/adyshev/tokenomy#readme",
+  "publishConfig": {
+    "access": "public"
   }
 }
