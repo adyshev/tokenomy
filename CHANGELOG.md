@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+- Added intent/risk-aware routing, classifier decision caching, adaptive fallback tiers, and compact project digest injection for large/repeated contexts.
+- Changed the default medium model preference to `gpt-5.4` before `gpt-5.4-mini`.
 - Added the installed Tokenomy package version to `/tokenomy status`.
 - Synced npm's default `latest` dist-tag during publish so `pi install npm:tokenomy-pi` gets the current beta.
 - Fixed stats persistence for globally installed Tokenomy in projects that do not already have a `.pi` directory.

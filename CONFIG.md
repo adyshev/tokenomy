@@ -21,7 +21,7 @@ Project config wins over global config.
   "models": {
     "classifier": ["gpt-5.4-mini"],
     "simple": ["gpt-5.4-mini"],
-    "medium": ["gpt-5.4-mini", "gpt-5.4"],
+    "medium": ["gpt-5.4", "gpt-5.4-mini"],
     "complex": ["gpt-5.5", "gpt-5.4"]
   }
 }
@@ -61,7 +61,58 @@ Supported values are `off`, `minimal`, `low`, `medium`, `high`, and `xhigh`.
 
 The classifier is optional and uses the cheapest configured classifier model.
 Its result is accepted only when confidence is at least `minConfidence`.
-Otherwise Tokenomy falls back to the cheapest available configured model.
+Accepted decisions are cached when `cache.enabled` is true. Otherwise Tokenomy
+uses risk-aware fallback: low-risk uncertainty goes cheap, medium-risk work goes
+to the medium tier, and configured high-risk intents go to the complex tier.
+
+## Cache
+
+```json
+{
+  "cache": {
+    "enabled": true,
+    "classifierTtlMs": 604800000,
+    "maxClassifierEntries": 200,
+    "projectDigest": true
+  }
+}
+```
+
+Classifier cache entries are stored in `.pi/tokenomy-cache/classifier-cache.json`.
+Project digest metadata is stored in `.pi/tokenomy-cache/project-digest.json`.
+Neither cache stores model responses, API keys, or auth headers.
+
+## Distillation
+
+```json
+{
+  "distillation": {
+    "enabled": true,
+    "minContextTokens": 80000,
+    "repeatPromptThreshold": 3,
+    "maxDigestChars": 1200
+  }
+}
+```
+
+This controls compact project digest injection. Tokenomy injects the digest when
+context is large or when the same intent has repeated enough times.
+
+## Adaptive Routing
+
+```json
+{
+  "adaptive": {
+    "enabled": true,
+    "mediumFallbackMinRisk": "medium",
+    "complexFallbackIntents": ["architecture", "release"]
+  }
+}
+```
+
+Adaptive fallback prevents risky uncertain prompts from always dropping to the
+cheapest model. It also tracks per-intent route counters in
+`.pi/tokenomy-stats.json` for future tuning.
 
 ## Thresholds
 

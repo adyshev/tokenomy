@@ -4,7 +4,7 @@
   "models": {
     "classifier": ["gpt-5.4-mini"],
     "simple": ["gpt-5.4-mini"],
-    "medium": ["gpt-5.4-mini", "gpt-5.4"],
+    "medium": ["gpt-5.4", "gpt-5.4-mini"],
     "complex": ["gpt-5.5", "gpt-5.4"]
   },
   "thinking": {

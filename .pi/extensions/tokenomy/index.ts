@@ -1,5 +1,6 @@
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { complete, type Api, type Model } from "@earendil-works/pi-ai/compat";
 import type {
   ExtensionAPI,
@@ -13,6 +14,15 @@ import {
 type Tier = "simple" | "medium" | "complex";
 type ToolProfile = "none" | "read" | "write";
 type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+type PromptIntent =
+  | "answer"
+  | "read"
+  | "single_edit"
+  | "multi_edit"
+  | "debug"
+  | "architecture"
+  | "release";
+type RiskLevel = "low" | "medium" | "high";
 
 type ModelSpec = string;
 
@@ -32,6 +42,23 @@ interface TokenomyConfig {
     maxPromptChars: number;
     maxEstimatedClassifierTokens: number;
     minConfidence: number;
+  };
+  cache: {
+    enabled: boolean;
+    classifierTtlMs: number;
+    maxClassifierEntries: number;
+    projectDigest: boolean;
+  };
+  distillation: {
+    enabled: boolean;
+    minContextTokens: number;
+    repeatPromptThreshold: number;
+    maxDigestChars: number;
+  };
+  adaptive: {
+    enabled: boolean;
+    mediumFallbackMinRisk: RiskLevel;
+    complexFallbackIntents: PromptIntent[];
   };
   thresholds: {
     largeContextTokens: number;
@@ -61,6 +88,8 @@ interface TokenomyConfig {
 
 interface LocalAnalysis {
   tier: Tier;
+  intent: PromptIntent;
+  risk: RiskLevel;
   toolProfile: ToolProfile;
   ambiguous: boolean;
   confidence: number;
@@ -71,8 +100,10 @@ interface LocalAnalysis {
 
 interface RouterDecision {
   tier: Tier;
-  source: "local" | "classifier" | "fallback";
+  source: "local" | "classifier" | "classifier-cache" | "fallback";
   toolProfile: ToolProfile;
+  intent: PromptIntent;
+  risk: RiskLevel;
   reason: string;
   confidence?: number;
   signals: string[];
@@ -84,7 +115,50 @@ interface TokenomyStats {
   lifetimeEstimatedTokensSaved: number;
   routedPrompts: number;
   sessionsStarted: number;
+  classifierCacheHits: number;
+  projectDigestUses: number;
+  adaptiveFallbacks: number;
+  intents: Record<
+    string,
+    {
+      routedPrompts: number;
+      fallbackPrompts: number;
+      complexPrompts: number;
+      cacheHits: number;
+    }
+  >;
   updatedAt: string;
+}
+
+interface ClassifierResult {
+  tier: Tier;
+  confidence: number;
+  reason: string;
+}
+
+interface ClassifierCacheEntry extends ClassifierResult {
+  key: string;
+  intent: PromptIntent;
+  risk: RiskLevel;
+  contextBucket: string;
+  createdAt: number;
+  lastUsedAt: number;
+  hits: number;
+}
+
+interface ClassifierCache {
+  entries: ClassifierCacheEntry[];
+}
+
+interface ProjectDigest {
+  project: string;
+  updatedAt: string;
+  promptsSeen: number;
+  intentCounts: Record<string, number>;
+  lastIntent?: PromptIntent;
+  lastTier?: Tier;
+  lastModel?: string;
+  lastSignals?: string[];
 }
 
 const BUILTIN_TOOL_NAMES = new Set([
@@ -103,7 +177,7 @@ const DEFAULT_CONFIG: TokenomyConfig = {
   models: {
     classifier: ["gpt-5.4-mini"],
     simple: ["gpt-5.4-mini", "gpt-5.4"],
-    medium: ["gpt-5.4-mini", "gpt-5.4"],
+    medium: ["gpt-5.4", "gpt-5.4-mini"],
     complex: ["gpt-5.5", "gpt-5.4"],
   },
   thinking: {
@@ -117,6 +191,23 @@ const DEFAULT_CONFIG: TokenomyConfig = {
     maxPromptChars: 4000,
     maxEstimatedClassifierTokens: 1400,
     minConfidence: 0.95,
+  },
+  cache: {
+    enabled: true,
+    classifierTtlMs: 7 * 24 * 60 * 60 * 1000,
+    maxClassifierEntries: 200,
+    projectDigest: true,
+  },
+  distillation: {
+    enabled: true,
+    minContextTokens: 80_000,
+    repeatPromptThreshold: 3,
+    maxDigestChars: 1200,
+  },
+  adaptive: {
+    enabled: true,
+    mediumFallbackMinRisk: "medium",
+    complexFallbackIntents: ["architecture", "release"],
   },
   thresholds: {
     largeContextTokens: 80_000,
@@ -148,8 +239,16 @@ const EMPTY_STATS: TokenomyStats = {
   lifetimeEstimatedTokensSaved: 0,
   routedPrompts: 0,
   sessionsStarted: 0,
+  classifierCacheHits: 0,
+  projectDigestUses: 0,
+  adaptiveFallbacks: 0,
+  intents: {},
   updatedAt: "",
 };
+
+function emptyStats(): TokenomyStats {
+  return { ...EMPTY_STATS, intents: {} };
+}
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -193,22 +292,48 @@ function statsPath(cwd: string): string {
   return join(cwd, CONFIG_DIR_NAME, "tokenomy-stats.json");
 }
 
+function cacheDir(cwd: string): string {
+  return join(cwd, CONFIG_DIR_NAME, "tokenomy-cache");
+}
+
+function classifierCachePath(cwd: string): string {
+  return join(cacheDir(cwd), "classifier-cache.json");
+}
+
+function projectDigestPath(cwd: string): string {
+  return join(cacheDir(cwd), "project-digest.json");
+}
+
+function safeInt(value: unknown): number {
+  return typeof value === "number" ? Math.max(0, Math.round(value)) : 0;
+}
+
 function loadStats(cwd: string): TokenomyStats {
   const parsed = loadJson(statsPath(cwd));
-  if (!isObject(parsed)) return { ...EMPTY_STATS };
+  if (!isObject(parsed)) return emptyStats();
+  const intents: TokenomyStats["intents"] = {};
+  if (isObject(parsed.intents)) {
+    for (const [intent, value] of Object.entries(parsed.intents)) {
+      if (!isObject(value)) continue;
+      intents[intent] = {
+        routedPrompts: safeInt(value.routedPrompts),
+        fallbackPrompts: safeInt(value.fallbackPrompts),
+        complexPrompts: safeInt(value.complexPrompts),
+        cacheHits: safeInt(value.cacheHits),
+      };
+    }
+  }
   return {
     lifetimeEstimatedTokensSaved:
       typeof parsed.lifetimeEstimatedTokensSaved === "number"
         ? Math.max(0, Math.round(parsed.lifetimeEstimatedTokensSaved))
         : 0,
-    routedPrompts:
-      typeof parsed.routedPrompts === "number"
-        ? Math.max(0, Math.round(parsed.routedPrompts))
-        : 0,
-    sessionsStarted:
-      typeof parsed.sessionsStarted === "number"
-        ? Math.max(0, Math.round(parsed.sessionsStarted))
-        : 0,
+    routedPrompts: safeInt(parsed.routedPrompts),
+    sessionsStarted: safeInt(parsed.sessionsStarted),
+    classifierCacheHits: safeInt(parsed.classifierCacheHits),
+    projectDigestUses: safeInt(parsed.projectDigestUses),
+    adaptiveFallbacks: safeInt(parsed.adaptiveFallbacks),
+    intents,
     updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : "",
   };
 }
@@ -221,6 +346,202 @@ function saveStats(cwd: string, stats: TokenomyStats): void {
   const path = statsPath(cwd);
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+}
+
+function hashText(text: string): string {
+  return createHash("sha256").update(text).digest("hex").slice(0, 24);
+}
+
+function contextBucket(contextTokens: number | undefined): string {
+  if (contextTokens === undefined) return "unknown";
+  if (contextTokens < 20_000) return "small";
+  if (contextTokens < 80_000) return "medium";
+  if (contextTokens < 120_000) return "large";
+  return "huge";
+}
+
+function normalizedPrompt(prompt: string): string {
+  return prompt.toLowerCase().replace(/\s+/g, " ").trim().slice(0, 4000);
+}
+
+function classifierCacheKey(
+  prompt: string,
+  contextTokens: number | undefined,
+  analysis: LocalAnalysis,
+  config: TokenomyConfig,
+): string {
+  return hashText(
+    [
+      normalizedPrompt(prompt),
+      contextBucket(contextTokens),
+      analysis.intent,
+      analysis.risk,
+      analysis.toolProfile,
+      String(config.classifier.minConfidence),
+    ].join("\n"),
+  );
+}
+
+function loadClassifierCache(cwd: string): ClassifierCache {
+  const parsed = loadJson(classifierCachePath(cwd));
+  if (!isObject(parsed) || !Array.isArray(parsed.entries)) {
+    return { entries: [] };
+  }
+  return {
+    entries: parsed.entries.filter(
+      (entry): entry is ClassifierCacheEntry =>
+        isObject(entry) &&
+        typeof entry.key === "string" &&
+        (entry.tier === "simple" ||
+          entry.tier === "medium" ||
+          entry.tier === "complex") &&
+        typeof entry.confidence === "number" &&
+        typeof entry.reason === "string" &&
+        typeof entry.intent === "string" &&
+        typeof entry.risk === "string" &&
+        typeof entry.contextBucket === "string" &&
+        typeof entry.createdAt === "number" &&
+        typeof entry.lastUsedAt === "number" &&
+        typeof entry.hits === "number",
+    ),
+  };
+}
+
+function saveClassifierCache(
+  cwd: string,
+  cache: ClassifierCache,
+  config: TokenomyConfig,
+): void {
+  const path = classifierCachePath(cwd);
+  mkdirSync(dirname(path), { recursive: true });
+  const entries = [...cache.entries]
+    .sort((a, b) => b.lastUsedAt - a.lastUsedAt)
+    .slice(0, config.cache.maxClassifierEntries);
+  writeFileSync(path, `${JSON.stringify({ entries }, null, 2)}\n`, "utf8");
+}
+
+function getClassifierCacheEntry(
+  cwd: string,
+  key: string,
+  config: TokenomyConfig,
+): ClassifierCacheEntry | undefined {
+  if (!config.cache.enabled) return undefined;
+  try {
+    const now = Date.now();
+    const cache = loadClassifierCache(cwd);
+    const entry = cache.entries.find((item) => item.key === key);
+    if (!entry || now - entry.createdAt > config.cache.classifierTtlMs) {
+      return undefined;
+    }
+    entry.hits += 1;
+    entry.lastUsedAt = now;
+    saveClassifierCache(cwd, cache, config);
+    return entry;
+  } catch {
+    return undefined;
+  }
+}
+
+function putClassifierCacheEntry(
+  cwd: string,
+  key: string,
+  result: ClassifierResult,
+  contextTokens: number | undefined,
+  analysis: LocalAnalysis,
+  config: TokenomyConfig,
+): void {
+  if (!config.cache.enabled) return;
+  try {
+    const now = Date.now();
+    const cache = loadClassifierCache(cwd);
+    const next: ClassifierCacheEntry = {
+      ...result,
+      key,
+      intent: analysis.intent,
+      risk: analysis.risk,
+      contextBucket: contextBucket(contextTokens),
+      createdAt: now,
+      lastUsedAt: now,
+      hits: 0,
+    };
+    cache.entries = [
+      next,
+      ...cache.entries.filter((entry) => entry.key !== key),
+    ];
+    saveClassifierCache(cwd, cache, config);
+  } catch {
+    // Routing must not fail or upshift just because the local cache is invalid.
+  }
+}
+
+function loadProjectDigest(cwd: string): ProjectDigest | undefined {
+  const parsed = loadJson(projectDigestPath(cwd));
+  if (!isObject(parsed)) return undefined;
+  return {
+    project: typeof parsed.project === "string" ? parsed.project : basename(cwd),
+    updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : "",
+    promptsSeen: safeInt(parsed.promptsSeen),
+    intentCounts: isObject(parsed.intentCounts)
+      ? Object.fromEntries(
+          Object.entries(parsed.intentCounts).map(([key, value]) => [
+            key,
+            safeInt(value),
+          ]),
+        )
+      : {},
+    lastIntent:
+      typeof parsed.lastIntent === "string"
+        ? (parsed.lastIntent as PromptIntent)
+        : undefined,
+    lastTier:
+      parsed.lastTier === "simple" ||
+      parsed.lastTier === "medium" ||
+      parsed.lastTier === "complex"
+        ? parsed.lastTier
+        : undefined,
+    lastModel: typeof parsed.lastModel === "string" ? parsed.lastModel : undefined,
+    lastSignals: Array.isArray(parsed.lastSignals)
+      ? parsed.lastSignals.filter((item): item is string => typeof item === "string")
+      : undefined,
+  };
+}
+
+function safeLoadProjectDigest(cwd: string): ProjectDigest | undefined {
+  try {
+    return loadProjectDigest(cwd);
+  } catch {
+    return undefined;
+  }
+}
+
+function saveProjectDigest(cwd: string, digest: ProjectDigest): void {
+  const path = projectDigestPath(cwd);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(digest, null, 2)}\n`, "utf8");
+}
+
+function updateProjectDigest(
+  cwd: string,
+  analysis: LocalAnalysis,
+  decision: RouterDecision,
+  config: TokenomyConfig,
+): void {
+  if (!config.cache.projectDigest) return;
+  const digest = loadProjectDigest(cwd) ?? {
+    project: basename(cwd),
+    updatedAt: "",
+    promptsSeen: 0,
+    intentCounts: {},
+  };
+  digest.promptsSeen += 1;
+  digest.intentCounts[analysis.intent] =
+    (digest.intentCounts[analysis.intent] ?? 0) + 1;
+  digest.lastIntent = analysis.intent;
+  digest.lastTier = decision.tier;
+  digest.lastModel = decision.model;
+  digest.lastSignals = analysis.signals.slice(-8);
+  digest.updatedAt = new Date().toISOString();
+  saveProjectDigest(cwd, digest);
 }
 
 function validateConfig(config: TokenomyConfig): string[] {
@@ -254,6 +575,36 @@ function validateConfig(config: TokenomyConfig): string[] {
   ) {
     warnings.push("classifier.minConfidence must be a number from 0 to 1");
   }
+  if (
+    typeof config.cache.classifierTtlMs !== "number" ||
+    config.cache.classifierTtlMs < 0
+  ) {
+    warnings.push("cache.classifierTtlMs must be a non-negative number");
+  }
+  if (
+    typeof config.cache.maxClassifierEntries !== "number" ||
+    config.cache.maxClassifierEntries < 1
+  ) {
+    warnings.push("cache.maxClassifierEntries must be at least 1");
+  }
+  if (
+    typeof config.distillation.minContextTokens !== "number" ||
+    config.distillation.minContextTokens < 0
+  ) {
+    warnings.push("distillation.minContextTokens must be a non-negative number");
+  }
+  if (
+    typeof config.distillation.repeatPromptThreshold !== "number" ||
+    config.distillation.repeatPromptThreshold < 1
+  ) {
+    warnings.push("distillation.repeatPromptThreshold must be at least 1");
+  }
+  if (
+    typeof config.distillation.maxDigestChars !== "number" ||
+    config.distillation.maxDigestChars < 200
+  ) {
+    warnings.push("distillation.maxDigestChars must be at least 200");
+  }
   return warnings;
 }
 
@@ -284,6 +635,52 @@ function estimateTokens(text: string): number {
 
 function hasAny(lower: string, patterns: RegExp[]): boolean {
   return patterns.some((pattern) => pattern.test(lower));
+}
+
+function classifyIntent(lower: string, toolProfile: ToolProfile): PromptIntent {
+  if (
+    hasAny(lower, [
+      /\b(release|publish|npm|github actions?|workflow|ci|tag|dist-tag|version bump|merge pr|pull request)\b/,
+    ])
+  ) {
+    return "release";
+  }
+  if (
+    hasAny(lower, [
+      /\b(architecture|architectural|redesign|security|auth|authorization|migration|migrate|performance|concurrency|transaction)\b/,
+    ])
+  ) {
+    return "architecture";
+  }
+  if (
+    hasAny(lower, [
+      /\b(debug|bug|regression|failing|failure|error|exception|traceback|stack trace)\b/,
+    ])
+  ) {
+    return "debug";
+  }
+  if (
+    hasAny(lower, [
+      /\b(refactor|rewrite|across files|multiple files|integration tests?|end-to-end|e2e)\b/,
+    ])
+  ) {
+    return "multi_edit";
+  }
+  if (toolProfile === "write") return "single_edit";
+  if (toolProfile === "read") return "read";
+  return "answer";
+}
+
+function riskForIntent(
+  intent: PromptIntent,
+  toolProfile: ToolProfile,
+  contextTokens: number | undefined,
+): RiskLevel {
+  if (intent === "architecture" || intent === "release") return "high";
+  if (intent === "debug" || intent === "multi_edit") return "medium";
+  if (toolProfile === "write") return "medium";
+  if ((contextTokens ?? 0) >= 80_000) return "medium";
+  return "low";
 }
 
 function analyzePrompt(
@@ -362,7 +759,18 @@ function analyzePrompt(
     toolProfile = "write";
   }
 
-  const tier: Tier = score >= 4 ? "complex" : score >= 1 ? "medium" : "simple";
+  const intent = classifyIntent(lower, toolProfile);
+  const risk = riskForIntent(intent, toolProfile, contextTokens);
+  signals.push(`intent:${intent}`, `risk:${risk}`);
+
+  let tier: Tier = score >= 4 ? "complex" : score >= 1 ? "medium" : "simple";
+  if (intent === "release" || intent === "architecture") tier = "complex";
+  else if (
+    tier === "simple" &&
+    (intent === "debug" || intent === "multi_edit" || intent === "single_edit")
+  ) {
+    tier = "medium";
+  }
   const confidence =
     tier === "simple"
       ? Math.max(0.5, Math.min(0.99, 0.96 - Math.abs(score) * 0.02))
@@ -375,6 +783,8 @@ function analyzePrompt(
 
   return {
     tier,
+    intent,
+    risk,
     toolProfile,
     ambiguous,
     confidence,
@@ -481,6 +891,8 @@ function buildClassifierPrompt(
     'Return ONLY minified JSON: {"tier":"simple|medium|complex","confidence":0.0-1.0,"reason":"max 8 words"}',
     "",
     `Local heuristic tier: ${analysis.tier}`,
+    `Local intent: ${analysis.intent}`,
+    `Local risk: ${analysis.risk}`,
     `Local score: ${analysis.score}`,
     `Local signals: ${analysis.signals.join(",") || "none"}`,
     `Current context tokens: ${contextTokens ?? "unknown"}`,
@@ -493,7 +905,7 @@ function buildClassifierPrompt(
 
 function parseClassifierResponse(
   text: string,
-): { tier: Tier; confidence: number; reason: string } | undefined {
+): ClassifierResult | undefined {
   const jsonText = text.match(/\{[\s\S]*\}/)?.[0] ?? text.trim();
   try {
     const parsed = JSON.parse(jsonText) as {
@@ -537,7 +949,7 @@ async function classifyWithCheapModel(
   analysis: LocalAnalysis,
   config: TokenomyConfig,
   ctx: ExtensionContext,
-): Promise<{ tier: Tier; confidence: number; reason: string } | undefined> {
+): Promise<ClassifierResult | undefined> {
   const classifier = findFirstModel(
     ctx,
     config.models.classifier,
@@ -582,6 +994,92 @@ async function classifyWithCheapModel(
     .map((part) => part.text)
     .join("\n");
   return parseClassifierResponse(text);
+}
+
+function riskAtLeast(risk: RiskLevel, minimum: RiskLevel): boolean {
+  const rank: Record<RiskLevel, number> = { low: 0, medium: 1, high: 2 };
+  return rank[risk] >= rank[minimum];
+}
+
+function fallbackTierFor(
+  analysis: LocalAnalysis,
+  config: TokenomyConfig,
+  stats: TokenomyStats,
+): Tier {
+  if (!config.adaptive.enabled) return "simple";
+  if (config.adaptive.complexFallbackIntents.includes(analysis.intent)) {
+    return "complex";
+  }
+  if (riskAtLeast(analysis.risk, config.adaptive.mediumFallbackMinRisk)) {
+    return "medium";
+  }
+  const history = stats.intents[analysis.intent];
+  if (history && history.fallbackPrompts >= 2 && analysis.risk !== "low") {
+    return "medium";
+  }
+  return "simple";
+}
+
+function findFallbackModelForTier(
+  ctx: ExtensionContext,
+  config: TokenomyConfig,
+  tier: Tier,
+): Model<Api> | undefined {
+  if (tier === "simple") return findBestConfiguredFallbackModel(ctx, config);
+  return (
+    findFirstModel(ctx, config.models[tier], config.provider) ??
+    findBestConfiguredFallbackModel(ctx, config)
+  );
+}
+
+function updateIntentStats(
+  stats: TokenomyStats,
+  analysis: LocalAnalysis,
+  decision: RouterDecision,
+): void {
+  const current = stats.intents[analysis.intent] ?? {
+    routedPrompts: 0,
+    fallbackPrompts: 0,
+    complexPrompts: 0,
+    cacheHits: 0,
+  };
+  current.routedPrompts += 1;
+  if (decision.source === "fallback") current.fallbackPrompts += 1;
+  if (decision.tier === "complex") current.complexPrompts += 1;
+  if (decision.source === "classifier-cache") current.cacheHits += 1;
+  stats.intents[analysis.intent] = current;
+}
+
+function shouldUseProjectDigest(
+  digest: ProjectDigest | undefined,
+  analysis: LocalAnalysis,
+  contextTokens: number | undefined,
+  config: TokenomyConfig,
+): boolean {
+  if (!config.distillation.enabled || !digest) return false;
+  if ((contextTokens ?? 0) >= config.distillation.minContextTokens) return true;
+  return (
+    (digest.intentCounts[analysis.intent] ?? 0) >=
+    config.distillation.repeatPromptThreshold
+  );
+}
+
+function buildProjectDigestPrompt(
+  digest: ProjectDigest,
+  config: TokenomyConfig,
+): string {
+  const lines = [
+    "Tokenomy compact project digest is active.",
+    `Project: ${digest.project}`,
+    `Prompts seen: ${digest.promptsSeen}`,
+    `Intent counts: ${Object.entries(digest.intentCounts)
+      .map(([intent, count]) => `${intent}:${count}`)
+      .join(", ") || "none"}`,
+    `Last route: ${digest.lastIntent ?? "unknown"} -> ${digest.lastTier ?? "unknown"} (${digest.lastModel ?? "unknown"})`,
+    `Last signals: ${digest.lastSignals?.join(", ") || "none"}`,
+    "Use this digest to avoid repeated broad context restatement; verify with tools only when needed.",
+  ];
+  return lines.join("\n").slice(0, config.distillation.maxDigestChars);
 }
 
 function shouldUseClassifier(
@@ -686,7 +1184,7 @@ export default function tokenomy(pi: ExtensionAPI) {
   let configWarnings: string[] = [];
   let baselineModel: string | undefined;
   let estimatedTokensSaved = 0;
-  let stats: TokenomyStats = { ...EMPTY_STATS };
+  let stats: TokenomyStats = emptyStats();
   let statsWarning: string | undefined;
   let statsSessionRecorded = false;
 
@@ -707,7 +1205,7 @@ export default function tokenomy(pi: ExtensionAPI) {
       stats = loadStats(ctx.cwd);
       statsSessionRecorded = false;
     } catch (error) {
-      stats = { ...EMPTY_STATS };
+      stats = emptyStats();
       statsSessionRecorded = false;
       statsWarning = `failed to load Tokenomy stats: ${error instanceof Error ? error.message : String(error)}`;
     }
@@ -766,24 +1264,44 @@ export default function tokenomy(pi: ExtensionAPI) {
     let confidence: number | undefined;
     const heuristicUncertain =
       analysis.confidence < config.classifier.minConfidence;
+    const classifierKey = classifierCacheKey(
+      event.prompt,
+      contextTokens,
+      analysis,
+      config,
+    );
 
     if (shouldUseClassifier(analysis, event.prompt, config)) {
       try {
-        const classified = await classifyWithCheapModel(
-          event.prompt,
-          contextTokens,
-          analysis,
-          config,
-          ctx,
-        );
+        const cached = getClassifierCacheEntry(ctx.cwd, classifierKey, config);
+        const classified =
+          cached ??
+          (await classifyWithCheapModel(
+            event.prompt,
+            contextTokens,
+            analysis,
+            config,
+            ctx,
+          ));
+        if (!cached && classified) {
+          putClassifierCacheEntry(
+            ctx.cwd,
+            classifierKey,
+            classified,
+            contextTokens,
+            analysis,
+            config,
+          );
+        }
         if (
           classified &&
           classified.confidence >= config.classifier.minConfidence
         ) {
           tier = classified.tier;
-          source = "classifier";
-          reason = classified.reason;
+          source = cached ? "classifier-cache" : "classifier";
+          reason = cached ? `cached ${classified.reason}` : classified.reason;
           confidence = classified.confidence;
+          if (cached) stats.classifierCacheHits += 1;
         } else {
           source = "fallback";
           reason = classified
@@ -801,12 +1319,18 @@ export default function tokenomy(pi: ExtensionAPI) {
       confidence = analysis.confidence;
     }
 
-    let target =
-      source === "fallback"
-        ? findBestConfiguredFallbackModel(ctx, config)
-        : findFirstModel(ctx, config.models[tier], config.provider);
-    if (source === "fallback" && target) {
-      tier = "simple";
+    let target: Model<Api> | undefined;
+    if (source === "fallback") {
+      const fallbackTier = fallbackTierFor(analysis, config, stats);
+      if (fallbackTier !== "simple") stats.adaptiveFallbacks += 1;
+      tier = fallbackTier;
+      target = findFallbackModelForTier(ctx, config, fallbackTier);
+      reason =
+        fallbackTier === "simple"
+          ? reason
+          : `${reason}; adaptive ${analysis.risk}-risk fallback to ${fallbackTier}`;
+    } else {
+      target = findFirstModel(ctx, config.models[tier], config.provider);
     }
     if (!target) {
       target = findBestConfiguredFallbackModel(ctx, config);
@@ -825,6 +1349,8 @@ export default function tokenomy(pi: ExtensionAPI) {
       tier,
       source,
       toolProfile: analysis.toolProfile,
+      intent: analysis.intent,
+      risk: analysis.risk,
       reason,
       confidence,
       signals: analysis.signals,
@@ -865,6 +1391,7 @@ export default function tokenomy(pi: ExtensionAPI) {
       }
       stats.lifetimeEstimatedTokensSaved += promptSavings;
       stats.routedPrompts += 1;
+      updateIntentStats(stats, analysis, decision);
       try {
         saveStats(ctx.cwd, stats);
         statsWarning = undefined;
@@ -887,9 +1414,36 @@ export default function tokenomy(pi: ExtensionAPI) {
       );
     }
 
+    const digest = safeLoadProjectDigest(ctx.cwd);
+    const digestPrompt = shouldUseProjectDigest(
+      digest,
+      analysis,
+      contextTokens,
+      config,
+    )
+      ? buildProjectDigestPrompt(digest!, config)
+      : "";
+    if (digestPrompt && !config.debug.dryRun) {
+      stats.projectDigestUses += 1;
+      try {
+        saveStats(ctx.cwd, stats);
+        statsWarning = undefined;
+      } catch (error) {
+        statsWarning = `failed to save Tokenomy stats: ${error instanceof Error ? error.message : String(error)}`;
+      }
+    }
+    if (!config.debug.dryRun) {
+      try {
+        updateProjectDigest(ctx.cwd, analysis, decision, config);
+      } catch (error) {
+        statsWarning = `failed to save Tokenomy project digest: ${error instanceof Error ? error.message : String(error)}`;
+      }
+    }
+
     const discipline = buildTokenDiscipline(decision, contextTokens, config, estimatedTokensSaved);
-    if (!discipline) return;
-    return { systemPrompt: `${event.systemPrompt}\n\n${discipline}` };
+    const additions = [digestPrompt, discipline].filter(Boolean);
+    if (!additions.length) return;
+    return { systemPrompt: `${event.systemPrompt}\n\n${additions.join("\n\n")}` };
   });
 
   pi.registerCommand("tokenomy", {
@@ -927,7 +1481,7 @@ export default function tokenomy(pi: ExtensionAPI) {
         return;
       }
       if (action === "reset-stats") {
-        stats = { ...EMPTY_STATS };
+        stats = emptyStats();
         statsSessionRecorded = false;
         estimatedTokensSaved = 0;
         try {
@@ -950,6 +1504,8 @@ export default function tokenomy(pi: ExtensionAPI) {
           `Source: ${lastDecision.source}`,
           `Model: ${lastDecision.model ?? "none"}`,
           `Thinking: ${lastDecision.thinking}`,
+          `Intent: ${lastDecision.intent}`,
+          `Risk: ${lastDecision.risk}`,
           `Tool profile: ${lastDecision.toolProfile}`,
           `Confidence: ${lastDecision.confidence === undefined ? "n/a" : `${Math.round(lastDecision.confidence * 100)}%`}`,
           `Reason: ${lastDecision.reason}`,
@@ -986,7 +1542,11 @@ export default function tokenomy(pi: ExtensionAPI) {
         `Estimated tokens saved lifetime: ${stats.lifetimeEstimatedTokensSaved}`,
         `Routed prompts lifetime: ${stats.routedPrompts}`,
         `Tokenomy sessions lifetime: ${stats.sessionsStarted}`,
+        `Classifier cache hits lifetime: ${stats.classifierCacheHits}`,
+        `Project digest uses lifetime: ${stats.projectDigestUses}`,
+        `Adaptive fallbacks lifetime: ${stats.adaptiveFallbacks}`,
         `Baseline model: ${baselineModel ?? "unknown"}`,
+        `Cache directory: ${cacheDir(ctx.cwd)}`,
         `Stats file: ${statsPath(ctx.cwd)}`,
         ...(statsWarning ? [`Stats warning: ${statsWarning}`] : []),
         `Config files: ${join(getAgentDir(), "tokenomy.json")} and ${join(ctx.cwd, CONFIG_DIR_NAME, "tokenomy.json")}`,
