@@ -155,6 +155,19 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+function packageVersion(): string {
+  try {
+    const parsed = JSON.parse(
+      readFileSync(new URL("../../../package.json", import.meta.url), "utf8"),
+    );
+    return isObject(parsed) && typeof parsed.version === "string"
+      ? parsed.version
+      : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
 function deepMerge<T>(base: T, override: unknown): T {
   if (!isObject(base) || !isObject(override)) {
     return (override === undefined ? base : override) as T;
@@ -964,6 +977,7 @@ export default function tokenomy(pi: ExtensionAPI) {
 
       const lines = [
         `Tokenomy: ${config.enabled ? "enabled" : "disabled"}`,
+        `Version: ${packageVersion()}`,
         `Provider: ${config.provider}`,
         `Classifier: ${config.classifier.enabled ? "enabled" : "disabled"} (${config.classifier.onlyWhenAmbiguous ? "ambiguous only" : "all eligible"})`,
         `Tool management: ${config.tools.manage ? "enabled" : "disabled"}`,

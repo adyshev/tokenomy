@@ -12,6 +12,9 @@ import test from "node:test";
 
 import tokenomy from "../.pi/extensions/tokenomy/index.ts";
 
+const PACKAGE_VERSION = JSON.parse(readFileSync("package.json", "utf8"))
+  .version;
+
 const MODELS = [
   { provider: "openai-codex", id: "gpt-5.4" },
   { provider: "openai-codex", id: "gpt-5.4-mini" },
@@ -364,6 +367,19 @@ test("explains the last decision and resets stats", async () => {
   assert.equal(stats.lifetimeEstimatedTokensSaved, 0);
   assert.equal(stats.routedPrompts, 0);
   assert.equal(stats.sessionsStarted, 0);
+});
+
+test("shows the package version in status output", async () => {
+  const harness = createHarness(createProjectConfig());
+  await startSession(harness);
+
+  await runTokenomyCommand(harness, "status");
+
+  assert.match(harness.notifications.at(-1).message, /Tokenomy: enabled/);
+  assert.match(
+    harness.notifications.at(-1).message,
+    new RegExp(`Version: ${PACKAGE_VERSION}`),
+  );
 });
 
 test("toggles dry-run from the tokenomy command", async () => {

@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Added the installed Tokenomy package version to `/tokenomy status`.
 - Synced npm's default `latest` dist-tag during publish so `pi install npm:tokenomy-pi` gets the current beta.
 - Fixed stats persistence for globally installed Tokenomy in projects that do not already have a `.pi` directory.
 - Public-readiness documentation pass.
