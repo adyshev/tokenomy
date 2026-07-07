@@ -242,6 +242,22 @@ test("uses the cheapest fallback model when confidence is below threshold", asyn
   assert.equal(stats.sessionsStarted, 1);
 });
 
+test("keeps simple shell listing prompts on the cheap model in large contexts", async () => {
+  const harness = createHarness(createProjectConfig(), {
+    contextTokens: 90_000,
+  });
+  await startSession(harness);
+
+  await routePrompt(harness, "ls -l");
+
+  assert.equal(harness.selectedModels.at(-1), "openai-codex/gpt-5.4-mini");
+  assert.equal(harness.thinkingLevels.at(-1), "minimal");
+  assert.match(
+    harness.notifications.at(-1).message,
+    /Tokenomy: simple via fallback -> openai-codex\/gpt-5\.4-mini, thinking:minimal/,
+  );
+});
+
 test("routes medium coding work to the configured medium model", async () => {
   const harness = createHarness(createProjectConfig());
   await startSession(harness);
