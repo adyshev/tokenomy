@@ -879,7 +879,7 @@ export default function tokenomy(pi: ExtensionAPI) {
 
   pi.registerCommand("tokenomy", {
     description:
-      "Show or change Tokenomy token-router status: /tokenomy [on|off|reload|status]",
+      "Show or change Tokenomy token-router status: /tokenomy [on|off|reload|status|explain|reset-stats|dry-run on|dry-run off]",
     handler: async (args, ctx) => {
       const action = args.trim().toLowerCase() || "status";
       if (action === "on") {
@@ -892,6 +892,55 @@ export default function tokenomy(pi: ExtensionAPI) {
         config.enabled = false;
         ctx.ui.setStatus("tokenomy", "tokenomy:off");
         ctx.ui.notify("Tokenomy disabled", "info");
+        return;
+      }
+      if (action === "dry-run on") {
+        config.debug.dryRun = true;
+        ctx.ui.notify("Tokenomy dry-run enabled", "info");
+        return;
+      }
+      if (action === "dry-run off") {
+        config.debug.dryRun = false;
+        ctx.ui.notify("Tokenomy dry-run disabled", "info");
+        return;
+      }
+      if (action === "dry-run") {
+        ctx.ui.notify(
+          `Tokenomy dry-run: ${config.debug.dryRun ? "enabled" : "disabled"}`,
+          "info",
+        );
+        return;
+      }
+      if (action === "reset-stats") {
+        stats = { ...EMPTY_STATS };
+        statsSessionRecorded = false;
+        estimatedTokensSaved = 0;
+        try {
+          saveStats(ctx.cwd, stats);
+          statsWarning = undefined;
+          ctx.ui.notify("Tokenomy stats reset", "info");
+        } catch (error) {
+          statsWarning = `failed to reset Tokenomy stats: ${error instanceof Error ? error.message : String(error)}`;
+          ctx.ui.notify(`Tokenomy stats warning: ${statsWarning}`, "warning");
+        }
+        return;
+      }
+      if (action === "explain") {
+        if (!lastDecision) {
+          ctx.ui.notify("Tokenomy has not made a routing decision yet", "info");
+          return;
+        }
+        const lines = [
+          `Tier: ${lastDecision.tier}`,
+          `Source: ${lastDecision.source}`,
+          `Model: ${lastDecision.model ?? "none"}`,
+          `Thinking: ${lastDecision.thinking}`,
+          `Tool profile: ${lastDecision.toolProfile}`,
+          `Confidence: ${lastDecision.confidence === undefined ? "n/a" : `${Math.round(lastDecision.confidence * 100)}%`}`,
+          `Reason: ${lastDecision.reason}`,
+          `Signals: ${lastDecision.signals.join(", ") || "none"}`,
+        ];
+        ctx.ui.notify(lines.join("\n"), "info");
         return;
       }
       if (action === "reload") {

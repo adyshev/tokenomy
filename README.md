@@ -1,5 +1,8 @@
 # Tokenomy Pi Extension
 
+Status: beta. Tokenomy is suitable for private testing and early adopters, but
+it is not yet a general-purpose model router.
+
 Tokenomy is a project-local Pi extension for Codex users on the ChatGPT Plus
 plan. At this stage it is intentionally scoped to the `openai-codex` models
 available through Pi when a Plus/Pro Codex account is authenticated.
@@ -29,8 +32,17 @@ and configuration in this repo assume Codex models available to Plus/Pro users.
 
 - `.pi/extensions/tokenomy/index.ts` — Pi extension implementation
 - `.pi/tokenomy.json` — project configuration
+- `INSTALL.md` — install and update instructions
+- `CONFIG.md` — full configuration reference
+- `LIMITATIONS.md` — known limitations and beta caveats
+- `SECURITY.md` — security and stored-data notes
+- `CONTRIBUTING.md` — development and release checklist
 
 ## Usage
+
+See `INSTALL.md` for full setup steps. The short version is: copy the extension
+and config into a project, register it in `.pi/settings.json`, authenticate
+Codex in Pi, and start Pi from that project.
 
 Start Pi in this directory:
 
@@ -53,9 +65,15 @@ Useful commands inside Pi:
 /tokenomy off
 /tokenomy on
 /tokenomy reload
+/tokenomy explain
+/tokenomy reset-stats
+/tokenomy dry-run on
+/tokenomy dry-run off
 ```
 
 `/tokenomy status` shows the current routing state, last decision, and estimated tokens saved vs not using Tokenomy.
+`/tokenomy explain` shows the signals and reason for the last routing decision.
+`/tokenomy reset-stats` clears local lifetime counters.
 
 Routing decision notifications are enabled by default so you can see when
 Tokenomy switches models. To disable them, set `ui.notifyDecisions` to `false`
@@ -129,7 +147,7 @@ shows lifetime estimated savings stored locally in `.pi/tokenomy-stats.json`.
 
 ## Configuration
 
-Edit `.pi/tokenomy.json`.
+Edit `.pi/tokenomy.json`. See `CONFIG.md` for every option.
 
 Safer defaults for sharing:
 - `tools.manage` is `false` unless you opt in
@@ -151,7 +169,8 @@ pi --list-models | grep openai-codex
 
 Then update `.pi/tokenomy.json`.
 
-For public sharing, review `COMPATIBILITY.md` and `CHANGELOG.md`.
+Before public sharing, review `COMPATIBILITY.md`, `LIMITATIONS.md`, and
+`CHANGELOG.md`.
 
 ## Tests
 

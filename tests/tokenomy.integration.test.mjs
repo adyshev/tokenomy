@@ -16,66 +16,66 @@ function modelLabel(model) {
   return `${model.provider}/${model.id}`;
 }
 
-function createProjectConfig() {
+function createProjectConfig(overrides = {}) {
   const cwd = mkdtempSync(join(tmpdir(), "tokenomy-test-"));
   mkdirSync(join(cwd, ".pi"), { recursive: true });
+  const config = {
+    enabled: true,
+    provider: "openai-codex",
+    models: {
+      classifier: ["gpt-5.4-mini"],
+      simple: ["gpt-5.4-mini"],
+      medium: ["gpt-5.4-mini", "gpt-5.4"],
+      complex: ["gpt-5.5", "gpt-5.4"],
+    },
+    classifier: {
+      enabled: true,
+      onlyWhenAmbiguous: true,
+      maxPromptChars: 4000,
+      maxEstimatedClassifierTokens: 1400,
+      minConfidence: 0.95,
+    },
+    ui: {
+      status: true,
+      notifyDecisions: true,
+    },
+    ...overrides,
+  };
   writeFileSync(
     join(cwd, ".pi/tokenomy.json"),
-    `${JSON.stringify(
-      {
-        enabled: true,
-        provider: "openai-codex",
-        models: {
-          classifier: ["gpt-5.4-mini"],
-          simple: ["gpt-5.4-mini"],
-          medium: ["gpt-5.4-mini", "gpt-5.4"],
-          complex: ["gpt-5.5", "gpt-5.4"],
-        },
-        classifier: {
-          enabled: true,
-          onlyWhenAmbiguous: true,
-          maxPromptChars: 4000,
-          maxEstimatedClassifierTokens: 1400,
-          minConfidence: 0.95,
-        },
-        ui: {
-          status: true,
-          notifyDecisions: true,
-        },
-      },
-      null,
-      2,
-    )}\n`,
+    `${JSON.stringify(config, null, 2)}\n`,
     "utf8",
   );
   return cwd;
 }
 
-function createHarness(cwd) {
+function createHarness(cwd, options = {}) {
   const handlers = new Map();
+  const commands = new Map();
   const flags = new Map();
   const selectedModels = [];
   const thinkingLevels = [];
   const notifications = [];
   const statuses = new Map();
+  const models = options.models ?? MODELS;
 
   const ctx = {
     cwd,
     model: undefined,
     signal: new AbortController().signal,
     hasUI: true,
-    getContextUsage: () => ({ tokens: 12_000 }),
+    getContextUsage: () => ({ tokens: options.contextTokens ?? 12_000 }),
     modelRegistry: {
       find(provider, id) {
-        return MODELS.find(
+        return models.find(
           (model) => model.provider === provider && model.id === id,
         );
       },
       getAvailable() {
-        return MODELS;
+        return models;
       },
       async getApiKeyAndHeaders() {
-        throw new Error("Classifier should not be called in integration tests");
+        return options.classifierAuth ?? { ok: false };
       },
     },
     ui: {
@@ -124,13 +124,16 @@ function createHarness(cwd) {
     setActiveTools(next) {
       activeTools = next;
     },
-    registerCommand() {},
+    registerCommand(name, command) {
+      commands.set(name, command);
+    },
   };
 
   tokenomy(pi);
 
   return {
     ctx,
+    commands,
     handlers,
     notifications,
     selectedModels,
@@ -151,6 +154,10 @@ async function routePrompt(harness, prompt) {
     },
     harness.ctx,
   );
+}
+
+async function runTokenomyCommand(harness, args) {
+  return harness.commands.get("tokenomy").handler(args, harness.ctx);
 }
 
 test("starts on the configured complex baseline model", async () => {
@@ -215,4 +222,124 @@ test("uses the cheapest fallback model when confidence is below threshold", asyn
   );
   assert.equal(stats.routedPrompts, 1);
   assert.equal(stats.sessionsStarted, 1);
+});
+
+test("accepts a high-confidence classifier decision", async () => {
+  process.env.TOKENOMY_TEST_CLASSIFIER_RESPONSE =
+    '{"tier":"complex","confidence":0.97,"reason":"risky design"}';
+  const harness = createHarness(createProjectConfig(), {
+    classifierAuth: { ok: true, apiKey: "test-key", headers: {}, env: {} },
+  });
+  await startSession(harness);
+
+  await routePrompt(
+    harness,
+    "Please analyze this project context and decide the best routing approach for future provider support. Keep the answer practical and account for confidence, prompt size, and model availability.",
+  );
+
+  assert.equal(harness.selectedModels.at(-1), "openai-codex/gpt-5.5");
+  assert.equal(harness.thinkingLevels.at(-1), "medium");
+  assert.match(
+    harness.notifications.at(-1).message,
+    /Tokenomy: complex via classifier -> openai-codex\/gpt-5\.5, thinking:medium/,
+  );
+
+  delete process.env.TOKENOMY_TEST_CLASSIFIER_RESPONSE;
+});
+
+test("rejects a low-confidence classifier decision and falls back", async () => {
+  process.env.TOKENOMY_TEST_CLASSIFIER_RESPONSE =
+    '{"tier":"complex","confidence":0.71,"reason":"unsure"}';
+  const harness = createHarness(createProjectConfig(), {
+    classifierAuth: { ok: true, apiKey: "test-key", headers: {}, env: {} },
+  });
+  await startSession(harness);
+
+  await routePrompt(
+    harness,
+    "Please analyze this project context and decide the best routing approach for future provider support. Keep the answer practical and account for confidence, prompt size, and model availability.",
+  );
+
+  assert.equal(harness.selectedModels.at(-1), "openai-codex/gpt-5.4-mini");
+  assert.equal(harness.thinkingLevels.at(-1), "minimal");
+  assert.match(
+    harness.notifications.at(-1).message,
+    /Tokenomy: simple via fallback -> openai-codex\/gpt-5\.4-mini, thinking:minimal/,
+  );
+
+  delete process.env.TOKENOMY_TEST_CLASSIFIER_RESPONSE;
+});
+
+test("falls back when the selected tier model is unavailable", async () => {
+  const harness = createHarness(createProjectConfig(), {
+    models: [{ provider: "openai-codex", id: "gpt-5.4-mini" }],
+  });
+  await startSession(harness);
+
+  await routePrompt(
+    harness,
+    "Refactor the architecture to improve security and performance, implement tests, debug failures, and patch the extension.",
+  );
+
+  assert.equal(harness.selectedModels.at(-1), "openai-codex/gpt-5.4-mini");
+  assert.equal(harness.thinkingLevels.at(-1), "minimal");
+  assert.match(
+    harness.notifications.at(-1).message,
+    /Tokenomy: simple via fallback -> openai-codex\/gpt-5\.4-mini, thinking:minimal/,
+  );
+});
+
+test("warns about invalid config values", async () => {
+  const harness = createHarness(
+    createProjectConfig({
+      classifier: {
+        enabled: true,
+        onlyWhenAmbiguous: true,
+        maxPromptChars: 4000,
+        maxEstimatedClassifierTokens: 1400,
+        minConfidence: 1.5,
+      },
+    }),
+  );
+
+  await startSession(harness);
+
+  assert.match(
+    harness.notifications.at(-1).message,
+    /classifier\.minConfidence must be a number from 0 to 1/,
+  );
+});
+
+test("explains the last decision and resets stats", async () => {
+  const harness = createHarness(createProjectConfig());
+  await startSession(harness);
+  await routePrompt(harness, "Help with the project.");
+
+  await runTokenomyCommand(harness, "explain");
+  assert.match(harness.notifications.at(-1).message, /Tier: simple/);
+  assert.match(harness.notifications.at(-1).message, /Source: fallback/);
+
+  await runTokenomyCommand(harness, "reset-stats");
+  assert.equal(harness.notifications.at(-1).message, "Tokenomy stats reset");
+
+  const stats = JSON.parse(
+    readFileSync(join(harness.ctx.cwd, ".pi/tokenomy-stats.json"), "utf8"),
+  );
+  assert.equal(stats.lifetimeEstimatedTokensSaved, 0);
+  assert.equal(stats.routedPrompts, 0);
+  assert.equal(stats.sessionsStarted, 0);
+});
+
+test("toggles dry-run from the tokenomy command", async () => {
+  const harness = createHarness(createProjectConfig());
+  await startSession(harness);
+
+  await runTokenomyCommand(harness, "dry-run on");
+  assert.equal(harness.notifications.at(-1).message, "Tokenomy dry-run enabled");
+
+  await runTokenomyCommand(harness, "dry-run");
+  assert.equal(harness.notifications.at(-1).message, "Tokenomy dry-run: enabled");
+
+  await runTokenomyCommand(harness, "dry-run off");
+  assert.equal(harness.notifications.at(-1).message, "Tokenomy dry-run disabled");
 });

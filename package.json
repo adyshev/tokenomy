@@ -1,9 +1,15 @@
 {
   "name": "tokenomy",
   "version": "0.1.0",
+  "description": "Project-local Pi extension that routes Codex prompts by complexity and confidence.",
   "private": true,
+  "license": "MIT",
   "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "scripts": {
-    "test": "node --experimental-strip-types --loader ./tests/pi-extension-loader.mjs --test tests/*.test.mjs"
+    "test": "node --experimental-strip-types --loader ./tests/pi-extension-loader.mjs --test tests/*.test.mjs",
+    "pi:check": "pi --offline --approve --no-session --list-models openai-codex"
   }
 }
