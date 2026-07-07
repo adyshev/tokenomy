@@ -1,0 +1,36 @@
+{
+  "enabled": true,
+  "provider": "openai-codex",
+  "models": {
+    "classifier": ["gpt-5.4-mini"],
+    "simple": ["gpt-5.4-mini"],
+    "medium": ["gpt-5.4-mini", "gpt-5.4"],
+    "complex": ["gpt-5.5", "gpt-5.4"]
+  },
+  "thinking": {
+    "simple": "minimal",
+    "medium": "low",
+    "complex": "medium"
+  },
+  "classifier": {
+    "enabled": true,
+    "onlyWhenAmbiguous": true,
+    "maxPromptChars": 4000,
+    "maxEstimatedClassifierTokens": 1400,
+    "minConfidence": 0.95
+  },
+  "tools": {
+    "manage": false,
+    "preserveCustomTools": true,
+    "readOnlyTools": ["read", "grep", "find", "ls"],
+    "writeTools": ["read", "grep", "find", "ls", "edit", "write", "bash"]
+  },
+  "promptDiscipline": {
+    "enabled": true,
+    "maxAnswerBulletsSimple": 5
+  },
+  "ui": {
+    "status": true,
+    "notifyDecisions": true
+  }
+}

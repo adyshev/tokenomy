@@ -1,0 +1,3 @@
+{
+  "extensions": ["extensions/tokenomy/index.ts"]
+}
