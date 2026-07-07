@@ -23,6 +23,29 @@ make real model calls.
 GitHub Actions runs JSON validation and `npm test` on every push and pull
 request targeting `main`.
 
+## NPM Releases
+
+NPM publishing is automated after changes merge to `main`.
+
+Repository setup required:
+
+1. Create an npm automation token with publish access for `tokenomy-pi`.
+2. Add it to GitHub repository secrets as `NPM_TOKEN`.
+3. Bump `version` in `package.json` in a PR.
+4. Merge the PR to `main`.
+
+The `NPM Publish` workflow checks whether `package.json`'s version already
+exists on npm. If it does not exist, it publishes the package. Prerelease
+versions such as `0.1.0-beta` are published with the `beta` dist-tag; stable
+versions are published with `latest`.
+
+Manual publish fallback:
+
+```bash
+npm login
+npm publish --access public --tag beta
+```
+
 The test loader shims Pi imports, so CI does not need a real Pi install.
 
 Check that the repository is installable as a Pi package from a local checkout:

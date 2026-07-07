@@ -1,5 +1,5 @@
 {
-  "name": "tokenomy",
+  "name": "tokenomy-pi",
   "version": "0.1.0-beta",
   "description": "Project-local Pi extension that routes Codex prompts by complexity and confidence.",
   "license": "MIT",
@@ -10,6 +10,18 @@
     "codex",
     "routing",
     "token-economy"
+  ],
+  "files": [
+    ".pi/extensions/tokenomy/index.ts",
+    ".pi/tokenomy.json",
+    "README.md",
+    "INSTALL.md",
+    "CONFIG.md",
+    "COMPATIBILITY.md",
+    "LIMITATIONS.md",
+    "SECURITY.md",
+    "CHANGELOG.md",
+    "LICENSE"
   ],
   "engines": {
     "node": ">=22.19.0"
