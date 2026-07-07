@@ -29,6 +29,14 @@
     "enabled": true,
     "maxAnswerBulletsSimple": 5
   },
+  "promptSimplification": {
+    "enabled": true,
+    "maxClassifierPromptChars": 1600,
+    "maxLineChars": 240,
+    "headLines": 16,
+    "tailLines": 16,
+    "preserveSignalLines": 40
+  },
   "ui": {
     "status": true,
     "notifyDecisions": true

@@ -158,6 +158,11 @@ project digest from `.pi/tokenomy-cache/project-digest.json`. The digest stores
 routing metadata such as intent counts and last route, not prompt text or model
 responses.
 
+For large prompts that need classifier help, Tokenomy locally simplifies the
+classifier prompt first. It keeps head/tail context and signal lines such as
+errors, failed tests, file paths, and counts. The original user prompt is still
+sent to the selected agent model.
+
 Tokenomy also adjusts thinking level by tier:
 
 - `simple`: minimal thinking
@@ -175,6 +180,7 @@ Edit `.pi/tokenomy.json`. See `CONFIG.md` for every option.
 Safer defaults for sharing:
 - `tools.manage` is `false` unless you opt in
 - `debug.dryRun` lets you see routing without changing model/tool state
+- `promptSimplification.enabled` reduces classifier prompt size for large logs
 
 Default Codex model preferences are:
 

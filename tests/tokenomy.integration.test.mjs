@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { completeCalls } from "./pi-ai-compat-shim.mjs";
 import tokenomy from "../.pi/extensions/tokenomy/index.ts";
 
 const PACKAGE_VERSION = JSON.parse(readFileSync("package.json", "utf8"))
@@ -434,6 +435,52 @@ test("accepts a high-confidence classifier decision", async () => {
   delete process.env.TOKENOMY_TEST_CLASSIFIER_RESPONSE;
 });
 
+test("simplifies large prompts before classifier calls", async () => {
+  completeCalls.length = 0;
+  process.env.TOKENOMY_TEST_CLASSIFIER_RESPONSE =
+    '{"tier":"medium","confidence":1,"reason":"test failure"}';
+  const longLog = [
+    "Please inspect this failing test output and choose the best routing tier.",
+    ...Array.from(
+      { length: 180 },
+      (_, index) =>
+        `noise line ${index} lorem ipsum dolor sit amet consectetur adipiscing elit`,
+    ),
+    "FAIL tests/tokenomy.integration.test.mjs:42 expected cheap route",
+    "Error: expected openai-codex/gpt-5.4-mini but received gpt-5.4",
+    "at tests/tokenomy.integration.test.mjs:42:10",
+  ].join("\n");
+  const harness = createHarness(
+    createProjectConfig({
+      classifier: {
+        enabled: true,
+        onlyWhenAmbiguous: false,
+        maxPromptChars: 4000,
+        maxEstimatedClassifierTokens: 1400,
+        minConfidence: 1,
+      },
+    }),
+    {
+      classifierAuth: { ok: true, apiKey: "test-key", headers: {}, env: {} },
+    },
+  );
+  await startSession(harness);
+
+  await routePrompt(harness, longLog);
+
+  assert.equal(completeCalls.length, 1);
+  const request = completeCalls[0][1];
+  const classifierPrompt = request.messages[0].content[0].text;
+  assert.match(classifierPrompt, /Prompt simplified: yes/);
+  assert.match(
+    classifierPrompt,
+    /FAIL tests\/tokenomy\.integration\.test\.mjs:42/,
+  );
+  assert.ok(classifierPrompt.length < longLog.length);
+
+  delete process.env.TOKENOMY_TEST_CLASSIFIER_RESPONSE;
+});
+
 test("rejects a low-confidence classifier decision and falls back", async () => {
   process.env.TOKENOMY_TEST_CLASSIFIER_RESPONSE =
     '{"tier":"complex","confidence":0.71,"reason":"unsure"}';
@@ -527,6 +574,18 @@ test("shows the package version in status output", async () => {
   assert.match(
     harness.notifications.at(-1).message,
     new RegExp(`Version: ${PACKAGE_VERSION}`),
+  );
+});
+
+test("adds command output condensation guidance to the system prompt", async () => {
+  const harness = createHarness(createProjectConfig());
+  await startSession(harness);
+
+  const result = await routePrompt(harness, "Help with the project.");
+
+  assert.match(
+    result.systemPrompt,
+    /When command output is long, locally condense it before reasoning/,
   );
 });
 
