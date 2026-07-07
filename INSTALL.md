@@ -11,6 +11,18 @@ Tokenomy is distributed as a Pi package. Install it from git with `pi install`.
 
 ## Install with Pi
 
+Install from npm once the package is published:
+
+```bash
+pi install npm:tokenomy-pi
+```
+
+Project-local npm install:
+
+```bash
+pi install -l npm:tokenomy-pi
+```
+
 Recommended public install:
 
 ```bash
