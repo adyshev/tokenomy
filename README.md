@@ -1,10 +1,29 @@
 # Tokenomy Pi Extension
 
-Tokenomy is a project-local Pi extension that routes each prompt with one primary goal:
+Tokenomy is a project-local Pi extension for Codex users on the ChatGPT Plus
+plan. At this stage it is intentionally scoped to the `openai-codex` models
+available through Pi when a Plus/Pro Codex account is authenticated.
+
+Its primary goal is:
 
 > Minimize total token usage while preserving high-quality output.
 
-It does this by combining zero-token local heuristics with optional cheap-model classification only for ambiguous prompts.
+Tokenomy routes each prompt to the cheapest model tier that should still handle
+the work well. Simple prompts go to the cheapest configured Codex model, complex
+or risky prompts move up to a stronger model, and uncertain prompts fall back to
+the cheapest model unless Tokenomy reaches the configured confidence threshold.
+
+## Current Scope
+
+Tokenomy is built for:
+
+- Pi users running the ChatGPT Plus/Pro Codex provider
+- the `openai-codex` model family exposed by Pi
+- local project routing through `.pi/extensions/tokenomy/index.ts`
+
+It is not currently a general-purpose router for every provider or every model
+catalog. Other providers can be added later, but the defaults, model ranking,
+and configuration in this repo assume Codex models available to Plus/Pro users.
 
 ## Files
 
@@ -66,6 +85,47 @@ simple or uncertain enough to use fallback.
 For simple prompts it prefers the cheapest/fastest configured Codex model, minimal thinking, concise answers, and no tools when tools are unnecessary.
 
 For complex/high-risk prompts it may choose a stronger model because a weak model can waste more tokens through failed attempts, excessive tool loops, or corrections.
+
+## How routing works
+
+Tokenomy runs before each agent turn and makes a routing decision from local
+signals first. That local pass does not spend model tokens. It looks at prompt
+length, context size, images, and task language such as `explain`, `review`,
+`debug`, `implement`, `refactor`, `security`, or `performance`.
+
+The local heuristic assigns:
+
+- a tier: `simple`, `medium`, or `complex`
+- a tool profile: `none`, `read`, or `write`
+- a confidence score
+- a list of signals that explain the decision
+
+If the prompt is simple and the heuristic is confident enough, Tokenomy routes
+directly to the simple tier. If the prompt looks risky or likely to need edits,
+multi-step reasoning, broad code inspection, or careful design work, it routes
+to a stronger tier.
+
+For ambiguous prompts, Tokenomy can ask the cheapest configured classifier model
+for a tiny JSON decision. The classifier is only accepted when its confidence is
+at least `classifier.minConfidence`, which is `0.95` by default. If classifier
+confidence is below that threshold, classifier output is unavailable, or the
+local heuristic is below the same confidence threshold, Tokenomy uses fallback:
+the cheapest available configured model.
+
+This fallback policy is deliberate. When Tokenomy cannot confidently justify a
+more expensive model, it prefers not to spend extra tokens. Stronger models are
+used when the prompt clearly needs them or when a high-confidence classifier
+decision selects them.
+
+Tokenomy also adjusts thinking level by tier:
+
+- `simple`: minimal thinking
+- `medium`: low thinking
+- `complex`: medium thinking
+
+The status bar and decision notifications show the selected tier, source,
+model, thinking level, and estimated token savings. `/tokenomy status` also
+shows lifetime estimated savings stored locally in `.pi/tokenomy-stats.json`.
 
 ## Configuration
 
