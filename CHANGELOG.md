@@ -9,6 +9,7 @@
 - Added GitHub Actions CI for JSON validation and integration tests.
 - Added npm package metadata and automated npm publish workflow.
 - Added manual npm publish workflow dispatch and graceful skip when `NPM_TOKEN` is not configured.
+- Updated GitHub Actions to Node-24-compatible action versions and bumped beta package for npm publish flow testing.
 
 ## 0.1.0-beta - 2026-07-07
 - Added config validation and warnings for invalid/empty model lists.
