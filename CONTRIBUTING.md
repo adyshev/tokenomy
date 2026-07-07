@@ -39,6 +39,13 @@ exists on npm. If it does not exist, it publishes the package. Prerelease
 versions such as `0.1.0-beta` are published with the `beta` dist-tag; stable
 versions are published with `latest`.
 
+If `NPM_TOKEN` is missing, the workflow exits successfully with a warning so
+normal CI stays green. After adding the secret, rerun the workflow manually:
+
+```bash
+gh workflow run "NPM Publish" --repo adyshev/tokenomy
+```
+
 Manual publish fallback:
 
 ```bash

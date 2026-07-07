@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -54,11 +55,27 @@ jobs:
             echo "tag=latest" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Check npm token
+        id: npm-token
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [[ -n "$NODE_AUTH_TOKEN" ]]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish to npm
-        if: steps.published.outputs.exists == 'false'
+        if: steps.published.outputs.exists == 'false' && steps.npm-token.outputs.configured == 'true'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --access public --provenance --tag "${{ steps.dist-tag.outputs.tag }}"
+
+      - name: Skip missing npm token
+        if: steps.published.outputs.exists == 'false' && steps.npm-token.outputs.configured == 'false'
+        run: |
+          echo "::warning::NPM_TOKEN is not configured. Add an npm automation token as a repository secret, then rerun this workflow."
 
       - name: Skip already published version
         if: steps.published.outputs.exists == 'true'
