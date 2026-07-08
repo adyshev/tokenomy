@@ -1,6 +1,6 @@
 {
   "name": "tokenomy-pi",
-  "version": "0.1.10-beta",
+  "version": "0.1.11-beta",
   "description": "Project-local Pi extension that routes Codex prompts by complexity and confidence.",
   "license": "MIT",
   "type": "module",
