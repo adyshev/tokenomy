@@ -440,11 +440,11 @@ test("simplifies large prompts before classifier calls", async () => {
   process.env.TOKENOMY_TEST_CLASSIFIER_RESPONSE =
     '{"tier":"medium","confidence":1,"reason":"test failure"}';
   const longLog = [
-    "Please inspect this failing test output and choose the best routing tier.",
+    "Please inspect this failing test output in order to choose the best routing tier.",
     ...Array.from(
       { length: 180 },
       (_, index) =>
-        `noise line ${index} lorem ipsum dolor sit amet consectetur adipiscing elit`,
+        `noise line ${index} in order to inspect the application implementation documentation due to the fact that configuration may change`,
     ),
     "FAIL tests/tokenomy.integration.test.mjs:42 expected cheap route",
     "Error: expected openai-codex/gpt-5.4-mini but received gpt-5.4",
@@ -472,11 +472,58 @@ test("simplifies large prompts before classifier calls", async () => {
   const request = completeCalls[0][1];
   const classifierPrompt = request.messages[0].content[0].text;
   assert.match(classifierPrompt, /Prompt simplified: yes/);
+  assert.match(classifierPrompt, /Prompt compressed: yes\/\d+ tokens/);
+  assert.match(classifierPrompt, /\[DECODE\]/);
+  assert.match(classifierPrompt, /P1=/);
   assert.match(
     classifierPrompt,
     /FAIL tests\/tokenomy\.integration\.test\.mjs:42/,
   );
   assert.ok(classifierPrompt.length < longLog.length);
+
+  delete process.env.TOKENOMY_TEST_CLASSIFIER_RESPONSE;
+});
+
+test("skips classifier prompt compression when savings are too small", async () => {
+  completeCalls.length = 0;
+  process.env.TOKENOMY_TEST_CLASSIFIER_RESPONSE =
+    '{"tier":"medium","confidence":1,"reason":"test failure"}';
+  const longLog = [
+    "Analyze this output and choose the best routing tier.",
+    ...Array.from({ length: 220 }, (_, index) => `x${index} y${index} z${index}`),
+    "FAIL tests/tokenomy.integration.test.mjs:42 expected cheap route",
+  ].join("\n");
+  const harness = createHarness(
+    createProjectConfig({
+      classifier: {
+        enabled: true,
+        onlyWhenAmbiguous: false,
+        maxPromptChars: 4000,
+        maxEstimatedClassifierTokens: 1400,
+        minConfidence: 1,
+      },
+      promptSimplification: {
+        enabled: true,
+        minCompressionSavingsTokens: 1000,
+        maxClassifierPromptChars: 1600,
+        maxLineChars: 240,
+        headLines: 16,
+        tailLines: 16,
+        preserveSignalLines: 40,
+      },
+    }),
+    {
+      classifierAuth: { ok: true, apiKey: "test-key", headers: {}, env: {} },
+    },
+  );
+  await startSession(harness);
+
+  await routePrompt(harness, longLog);
+
+  const request = completeCalls[0][1];
+  const classifierPrompt = request.messages[0].content[0].text;
+  assert.match(classifierPrompt, /Prompt simplified: yes/);
+  assert.match(classifierPrompt, /Prompt compressed: no/);
 
   delete process.env.TOKENOMY_TEST_CLASSIFIER_RESPONSE;
 });

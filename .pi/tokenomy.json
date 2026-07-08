@@ -31,6 +31,7 @@
   },
   "promptSimplification": {
     "enabled": true,
+    "minCompressionSavingsTokens": 12,
     "maxClassifierPromptChars": 1600,
     "maxLineChars": 240,
     "headLines": 16,
