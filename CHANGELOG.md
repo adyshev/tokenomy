@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+- Removed Tokenomy's main Pi footer/status entry to avoid crowding or
+  conflicting with other extension footers; `/tokenomy status`, notifications,
+  history, and telemetry remain the stable visibility paths.
 
 ## 0.1.17-beta - 2026-07-08
 - Made the Tokenomy status/footer text visibly labeled and refreshed by

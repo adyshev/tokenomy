@@ -249,12 +249,11 @@ Tokenomy also adjusts thinking level by tier:
 - `medium`: low thinking
 - `complex`: medium thinking
 
-The status/footer entry and decision notifications show the selected tier,
-source, model, thinking level, and estimated token savings. Tokenomy writes its
-own `tokenomy` status entry, so it can appear alongside footer entries from
-other plugins instead of replacing them. The compact entry is labeled, for
-example `Tokenomy medium:local/96% saved:1300 lifetime:22350`. `/tokenomy
-status` also shows lifetime estimated savings stored locally in
+Decision notifications show the selected tier, source, model, thinking level,
+and estimated token savings. Tokenomy does not write a main Pi footer/status
+entry because Pi renders plugin footers in shared terminal space and long
+entries can crowd other extensions. Use `/tokenomy status` for the current
+routing state and lifetime estimated savings stored locally in
 `.pi/tokenomy-stats.json`.
 Recent routing decisions are stored locally in
 `.pi/tokenomy-cache/routing-history.json` when telemetry is enabled. Telemetry
