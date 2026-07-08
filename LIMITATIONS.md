@@ -18,6 +18,15 @@ or `review` appear in casual language.
 Classifier routing can improve ambiguous cases, but classifier output is only
 accepted above the configured confidence threshold.
 
+## Project Memory
+
+Project memory is local and advisory. It can save repeated project discovery,
+but stale or incomplete facts may be less useful than fresh inspection. The
+current user prompt always overrides injected memory. If memory appears wrong,
+inspect it with `/tokenomy memory show`, refresh it with `/tokenomy memory
+refresh`, clear it with `/tokenomy memory clear`, or disable it with
+`memory.enabled: false`.
+
 ## Classifier Prompt Compression
 
 Prompt simplification and TokenShrink compression apply only to classifier

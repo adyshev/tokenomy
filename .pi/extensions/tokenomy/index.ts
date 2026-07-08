@@ -55,6 +55,15 @@ interface TokenomyConfig {
     enabled: boolean;
     maxEntries: number;
   };
+  memory: {
+    enabled: boolean;
+    inject: boolean;
+    maxFacts: number;
+    maxInjectedChars: number;
+    maxFactChars: number;
+    staleAfterDays: number;
+    minContextTokensForInjection: number;
+  };
   distillation: {
     enabled: boolean;
     minContextTokens: number;
@@ -133,6 +142,7 @@ interface TokenomyStats {
   sessionsStarted: number;
   classifierCacheHits: number;
   projectDigestUses: number;
+  memoryInjections: number;
   adaptiveFallbacks: number;
   compressionGuardRejections: number;
   intents: Record<
@@ -203,6 +213,11 @@ interface RoutingHistoryEntry {
   classifierPromptCompressionGuarded?: boolean;
   classifierPromptCompressionGuardMissingLines?: number;
   classifierPromptCompressionTokensSaved?: number;
+  memoryInjected?: boolean;
+  memoryInjectedChars?: number;
+  memoryReason?: string;
+  memoryFactsUsed?: number;
+  memoryEstimatedTokensSaved?: number;
 }
 
 interface RoutingHistory {
@@ -216,6 +231,42 @@ interface ClassifierPromptTelemetry {
   guardMissingLines: number;
   tokensSaved: number;
   requiredLines: number;
+}
+
+type MemoryFactSource = "observed" | "config" | "package" | "workflow";
+type MemoryFactKind =
+  | "package"
+  | "command"
+  | "file"
+  | "workflow"
+  | "preference"
+  | "project";
+
+interface ProjectMemoryFact {
+  id: string;
+  text: string;
+  kind: MemoryFactKind;
+  source: MemoryFactSource;
+  confidence: "high" | "medium";
+  createdAt: string;
+  updatedAt: string;
+  lastUsedAt?: string;
+  uses: number;
+}
+
+interface ProjectMemory {
+  version: number;
+  project: string;
+  updatedAt: string;
+  facts: ProjectMemoryFact[];
+}
+
+interface MemoryInjection {
+  text: string;
+  reason: string;
+  factsUsed: number;
+  chars: number;
+  estimatedTokensSaved: number;
 }
 
 const BUILTIN_TOOL_NAMES = new Set([
@@ -258,6 +309,15 @@ const DEFAULT_CONFIG: TokenomyConfig = {
   telemetry: {
     enabled: true,
     maxEntries: 200,
+  },
+  memory: {
+    enabled: true,
+    inject: true,
+    maxFacts: 80,
+    maxInjectedChars: 1200,
+    maxFactChars: 240,
+    staleAfterDays: 30,
+    minContextTokensForInjection: 20_000,
   },
   distillation: {
     enabled: true,
@@ -312,6 +372,7 @@ const EMPTY_STATS: TokenomyStats = {
   sessionsStarted: 0,
   classifierCacheHits: 0,
   projectDigestUses: 0,
+  memoryInjections: 0,
   adaptiveFallbacks: 0,
   compressionGuardRejections: 0,
   intents: {},
@@ -380,6 +441,10 @@ function routingHistoryPath(cwd: string): string {
   return join(cacheDir(cwd), "routing-history.json");
 }
 
+function projectMemoryPath(cwd: string): string {
+  return join(cacheDir(cwd), "project-memory.json");
+}
+
 function safeInt(value: unknown): number {
   return typeof value === "number" ? Math.max(0, Math.round(value)) : 0;
 }
@@ -408,6 +473,7 @@ function loadStats(cwd: string): TokenomyStats {
     sessionsStarted: safeInt(parsed.sessionsStarted),
     classifierCacheHits: safeInt(parsed.classifierCacheHits),
     projectDigestUses: safeInt(parsed.projectDigestUses),
+    memoryInjections: safeInt(parsed.memoryInjections),
     adaptiveFallbacks: safeInt(parsed.adaptiveFallbacks),
     compressionGuardRejections: safeInt(parsed.compressionGuardRejections),
     intents,
@@ -472,6 +538,95 @@ function saveRoutingHistory(
   mkdirSync(dirname(path), { recursive: true });
   const entries = history.entries.slice(0, config.telemetry.maxEntries);
   writeFileSync(path, `${JSON.stringify({ entries }, null, 2)}\n`, "utf8");
+}
+
+function loadProjectMemory(cwd: string): ProjectMemory {
+  const parsed = loadJson(projectMemoryPath(cwd));
+  if (!isObject(parsed) || !Array.isArray(parsed.facts)) {
+    return {
+      version: 1,
+      project: basename(cwd),
+      updatedAt: "",
+      facts: [],
+    };
+  }
+  return {
+    version: typeof parsed.version === "number" ? parsed.version : 1,
+    project: typeof parsed.project === "string" ? parsed.project : basename(cwd),
+    updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : "",
+    facts: parsed.facts.filter(
+      (fact): fact is ProjectMemoryFact =>
+        isObject(fact) &&
+        typeof fact.id === "string" &&
+        typeof fact.text === "string" &&
+        typeof fact.kind === "string" &&
+        typeof fact.source === "string" &&
+        (fact.confidence === "high" || fact.confidence === "medium") &&
+        typeof fact.createdAt === "string" &&
+        typeof fact.updatedAt === "string" &&
+        typeof fact.uses === "number",
+    ),
+  };
+}
+
+function saveProjectMemory(cwd: string, memory: ProjectMemory): void {
+  const path = projectMemoryPath(cwd);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(memory, null, 2)}\n`, "utf8");
+}
+
+function safeLoadProjectMemory(cwd: string): ProjectMemory | undefined {
+  try {
+    return loadProjectMemory(cwd);
+  } catch {
+    return undefined;
+  }
+}
+
+function memoryFactId(kind: MemoryFactKind, text: string): string {
+  return hashText(`${kind}\n${text.toLowerCase().trim()}`);
+}
+
+function truncateFact(text: string, config: TokenomyConfig): string {
+  return text.replace(/\s+/g, " ").trim().slice(0, config.memory.maxFactChars);
+}
+
+function upsertMemoryFacts(
+  memory: ProjectMemory,
+  facts: Array<{
+    text: string;
+    kind: MemoryFactKind;
+    source: MemoryFactSource;
+    confidence: "high" | "medium";
+  }>,
+  config: TokenomyConfig,
+): ProjectMemory {
+  const now = new Date().toISOString();
+  const byId = new Map(memory.facts.map((fact) => [fact.id, fact]));
+  for (const fact of facts) {
+    const text = truncateFact(fact.text, config);
+    if (!text) continue;
+    const id = memoryFactId(fact.kind, text);
+    const existing = byId.get(id);
+    byId.set(id, {
+      id,
+      text,
+      kind: fact.kind,
+      source: fact.source,
+      confidence: fact.confidence,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+      lastUsedAt: existing?.lastUsedAt,
+      uses: existing?.uses ?? 0,
+    });
+  }
+  return {
+    ...memory,
+    updatedAt: now,
+    facts: [...byId.values()]
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .slice(0, config.memory.maxFacts),
+  };
 }
 
 function hashText(text: string): string {
@@ -602,6 +757,133 @@ function putClassifierCacheEntry(
   }
 }
 
+function loadObjectFile(path: string): Record<string, unknown> | undefined {
+  try {
+    const parsed = loadJson(path);
+    return isObject(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function packageScriptFact(
+  scripts: Record<string, unknown>,
+  name: string,
+): string | undefined {
+  const script = scripts[name];
+  if (typeof script !== "string") return undefined;
+  if (name === "test") return "Test command is npm test.";
+  return `${name} command is npm run ${name}.`;
+}
+
+function discoverProjectMemoryFacts(
+  cwd: string,
+  analysis: LocalAnalysis | undefined,
+  decision: RouterDecision | undefined,
+  config: TokenomyConfig,
+): Array<{
+  text: string;
+  kind: MemoryFactKind;
+  source: MemoryFactSource;
+  confidence: "high" | "medium";
+}> {
+  if (!config.memory.enabled) return [];
+  const facts: Array<{
+    text: string;
+    kind: MemoryFactKind;
+    source: MemoryFactSource;
+    confidence: "high" | "medium";
+  }> = [];
+  const packageJson = loadObjectFile(join(cwd, "package.json"));
+  if (packageJson) {
+    if (typeof packageJson.name === "string") {
+      facts.push({
+        text: `Package name is ${packageJson.name}.`,
+        kind: "package",
+        source: "package",
+        confidence: "high",
+      });
+    }
+    if (packageJson.type === "module") {
+      facts.push({
+        text: "Project uses Node.js ES modules.",
+        kind: "project",
+        source: "package",
+        confidence: "high",
+      });
+    }
+    if (isObject(packageJson.scripts)) {
+      const scripts = packageJson.scripts;
+      const directScripts = [
+        packageScriptFact(scripts, "test"),
+        packageScriptFact(scripts, "build"),
+        packageScriptFact(scripts, "lint"),
+        packageScriptFact(scripts, "json:check"),
+      ].filter((item): item is string => !!item);
+      for (const text of directScripts) {
+        facts.push({
+          text,
+          kind: "command",
+          source: "package",
+          confidence: "high",
+        });
+      }
+    }
+  }
+  if (existsSync(join(cwd, ".pi/extensions/tokenomy/index.ts"))) {
+    facts.push({
+      text: "Main Tokenomy extension file is .pi/extensions/tokenomy/index.ts.",
+      kind: "file",
+      source: "observed",
+      confidence: "high",
+    });
+  }
+  if (existsSync(join(cwd, ".github/workflows/npm-publish.yml"))) {
+    facts.push({
+      text: "Merging to main can trigger the npm publish GitHub Actions workflow.",
+      kind: "workflow",
+      source: "workflow",
+      confidence: "high",
+    });
+  }
+  if (existsSync(join(cwd, ".github/workflows/ci.yml"))) {
+    facts.push({
+      text: "GitHub Actions CI validates changes on pull requests.",
+      kind: "workflow",
+      source: "workflow",
+      confidence: "high",
+    });
+  }
+  if (analysis?.intent === "release" || decision?.intent === "release") {
+    facts.push({
+      text: "Release work should go through a pull request before merging to main.",
+      kind: "workflow",
+      source: "observed",
+      confidence: "medium",
+    });
+  }
+  return facts;
+}
+
+function updateProjectMemory(
+  cwd: string,
+  analysis: LocalAnalysis | undefined,
+  decision: RouterDecision | undefined,
+  config: TokenomyConfig,
+): ProjectMemory | undefined {
+  if (!config.memory.enabled) return undefined;
+  const memory = safeLoadProjectMemory(cwd) ?? {
+    version: 1,
+    project: basename(cwd),
+    updatedAt: "",
+    facts: [],
+  };
+  const facts = discoverProjectMemoryFacts(cwd, analysis, decision, config);
+  const next = upsertMemoryFacts(memory, facts, config);
+  saveProjectMemory(cwd, next);
+  return next;
+}
+
 function loadProjectDigest(cwd: string): ProjectDigest | undefined {
   const parsed = loadJson(projectDigestPath(cwd));
   if (!isObject(parsed)) return undefined;
@@ -723,6 +1005,39 @@ function validateConfig(config: TokenomyConfig): string[] {
     config.telemetry.maxEntries < 1
   ) {
     warnings.push("telemetry.maxEntries must be at least 1");
+  }
+  if (typeof config.memory.enabled !== "boolean") {
+    warnings.push("memory.enabled must be a boolean");
+  }
+  if (typeof config.memory.inject !== "boolean") {
+    warnings.push("memory.inject must be a boolean");
+  }
+  if (typeof config.memory.maxFacts !== "number" || config.memory.maxFacts < 1) {
+    warnings.push("memory.maxFacts must be at least 1");
+  }
+  if (
+    typeof config.memory.maxInjectedChars !== "number" ||
+    config.memory.maxInjectedChars < 200
+  ) {
+    warnings.push("memory.maxInjectedChars must be at least 200");
+  }
+  if (
+    typeof config.memory.maxFactChars !== "number" ||
+    config.memory.maxFactChars < 40
+  ) {
+    warnings.push("memory.maxFactChars must be at least 40");
+  }
+  if (
+    typeof config.memory.staleAfterDays !== "number" ||
+    config.memory.staleAfterDays < 1
+  ) {
+    warnings.push("memory.staleAfterDays must be at least 1");
+  }
+  if (
+    typeof config.memory.minContextTokensForInjection !== "number" ||
+    config.memory.minContextTokensForInjection < 0
+  ) {
+    warnings.push("memory.minContextTokensForInjection must be non-negative");
   }
   if (
     typeof config.distillation.minContextTokens !== "number" ||
@@ -1472,6 +1787,7 @@ function recordRoutingHistory(
   promptSavings: number,
   sessionEstimatedTokensSaved: number,
   classifierPromptTelemetry: ClassifierPromptTelemetry | undefined,
+  memoryInjection: MemoryInjection | undefined,
   config: TokenomyConfig,
 ): void {
   if (!config.telemetry.enabled) return;
@@ -1503,6 +1819,11 @@ function recordRoutingHistory(
       classifierPromptTelemetry?.guardMissingLines,
     classifierPromptCompressionTokensSaved:
       classifierPromptTelemetry?.tokensSaved,
+    memoryInjected: !!memoryInjection,
+    memoryInjectedChars: memoryInjection?.chars,
+    memoryReason: memoryInjection?.reason,
+    memoryFactsUsed: memoryInjection?.factsUsed,
+    memoryEstimatedTokensSaved: memoryInjection?.estimatedTokensSaved,
   };
   saveRoutingHistory(cwd, { entries: [entry, ...history.entries] }, config);
 }
@@ -1519,6 +1840,124 @@ function shouldUseProjectDigest(
     (digest.intentCounts[analysis.intent] ?? 0) >=
     config.distillation.repeatPromptThreshold
   );
+}
+
+function factIsStale(fact: ProjectMemoryFact, config: TokenomyConfig): boolean {
+  const staleMs = config.memory.staleAfterDays * 24 * 60 * 60 * 1000;
+  return Date.now() - Date.parse(fact.updatedAt) > staleMs;
+}
+
+function factRelevance(fact: ProjectMemoryFact, analysis: LocalAnalysis): number {
+  if (analysis.intent === "shell_simple") return 0;
+  if (analysis.intent === "release" && fact.kind === "workflow") return 4;
+  if (analysis.intent === "debug" && fact.kind === "command") return 3;
+  if (
+    (analysis.intent === "single_edit" ||
+      analysis.intent === "multi_edit" ||
+      analysis.intent === "architecture") &&
+    fact.kind === "file"
+  )
+    return 3;
+  if (fact.kind === "package" || fact.kind === "project") return 2;
+  if (analysis.toolProfile !== "none" && fact.kind === "command") return 2;
+  return 1;
+}
+
+function shouldInjectMemory(
+  memory: ProjectMemory | undefined,
+  prompt: string,
+  analysis: LocalAnalysis,
+  contextTokens: number | undefined,
+  config: TokenomyConfig,
+): boolean {
+  if (!config.memory.enabled || !config.memory.inject || !memory?.facts.length)
+    return false;
+  if (analysis.intent === "shell_simple") return false;
+  if ((contextTokens ?? 0) >= config.memory.minContextTokensForInjection)
+    return true;
+  if (
+    analysis.intent === "release" ||
+    analysis.intent === "debug" ||
+    analysis.intent === "multi_edit" ||
+    analysis.intent === "single_edit"
+  )
+    return true;
+  if (prompt.trim().length < 160 && analysis.toolProfile !== "none") return true;
+  return false;
+}
+
+function buildMemoryInjection(
+  memory: ProjectMemory | undefined,
+  prompt: string,
+  analysis: LocalAnalysis,
+  contextTokens: number | undefined,
+  config: TokenomyConfig,
+): MemoryInjection | undefined {
+  if (!shouldInjectMemory(memory, prompt, analysis, contextTokens, config)) {
+    return undefined;
+  }
+  const facts = memory!.facts
+    .filter((fact) => !factIsStale(fact, config))
+    .map((fact) => ({ fact, score: factRelevance(fact, analysis) }))
+    .filter(({ score }) => score > 0)
+    .sort((a, b) => b.score - a.score || b.fact.updatedAt.localeCompare(a.fact.updatedAt))
+    .map(({ fact }) => fact);
+  if (!facts.length) return undefined;
+
+  const reason =
+    analysis.intent === "release"
+      ? "release-workflow"
+      : analysis.intent === "debug"
+        ? "debug-commands"
+        : (contextTokens ?? 0) >= config.memory.minContextTokensForInjection
+          ? "large-context"
+          : "project-context";
+  const lines = [
+    "Tokenomy project memory is advisory. The current user prompt overrides it.",
+    "Use this memory only when relevant to avoid repeated discovery and unnecessary tool calls.",
+    `Project: ${memory!.project}`,
+    "Facts:",
+  ];
+  for (const fact of facts) {
+    const next = `- ${fact.text}`;
+    if (lines.join("\n").length + next.length + 1 > config.memory.maxInjectedChars)
+      break;
+    lines.push(next);
+  }
+  if (lines.length <= 4) return undefined;
+  const text = lines.join("\n");
+  return {
+    text,
+    reason,
+    factsUsed: lines.length - 4,
+    chars: text.length,
+    estimatedTokensSaved: Math.max(20, (lines.length - 4) * 25),
+  };
+}
+
+function markMemoryFactsUsed(
+  cwd: string,
+  memory: ProjectMemory | undefined,
+  injection: MemoryInjection | undefined,
+): void {
+  if (!memory || !injection) return;
+  const now = new Date().toISOString();
+  const usedTexts = new Set(
+    injection.text
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("- "))
+      .map((line) => line.slice(2)),
+  );
+  const next: ProjectMemory = {
+    ...memory,
+    updatedAt: now,
+    facts: memory.facts.map((fact) =>
+      usedTexts.has(fact.text)
+        ? { ...fact, lastUsedAt: now, uses: fact.uses + 1 }
+        : fact,
+    ),
+  };
+  saveProjectMemory(cwd, next);
 }
 
 function buildProjectDigestPrompt(
@@ -1656,6 +2095,9 @@ function formatRoutingHistoryEntry(entry: RoutingHistoryEntry): string {
         : entry.classifierPromptCompressed === false
           ? "compressed:no"
           : "classifier-prompt:n/a";
+  const memory = entry.memoryInjected
+    ? `memory:${entry.memoryReason ?? "injected"} facts:${entry.memoryFactsUsed ?? 0} chars:${entry.memoryInjectedChars ?? 0}`
+    : "memory:no";
   return [
     entry.at,
     `${entry.tier}/${entry.source}`,
@@ -1669,7 +2111,18 @@ function formatRoutingHistoryEntry(entry: RoutingHistoryEntry): string {
     `prompt:${entry.promptHash}`,
     compression,
     guard,
+    memory,
   ].join(" | ");
+}
+
+function memorySummary(memory: ProjectMemory | undefined, config: TokenomyConfig): string {
+  const facts = memory?.facts ?? [];
+  const stale = facts.filter((fact) => factIsStale(fact, config)).length;
+  return `Memory: ${config.memory.enabled ? "enabled" : "disabled"}, inject:${config.memory.inject ? "on" : "off"}, facts:${facts.length}, stale:${stale}`;
+}
+
+function formatMemoryFact(fact: ProjectMemoryFact): string {
+  return `${fact.id} | ${fact.kind}/${fact.source}/${fact.confidence} | uses:${fact.uses} | ${fact.text}`;
 }
 
 export default function tokenomy(pi: ExtensionAPI) {
@@ -1702,6 +2155,11 @@ export default function tokenomy(pi: ExtensionAPI) {
       stats = emptyStats();
       statsSessionRecorded = false;
       statsWarning = `failed to load Tokenomy stats: ${error instanceof Error ? error.message : String(error)}`;
+    }
+    try {
+      updateProjectMemory(ctx.cwd, undefined, undefined, config);
+    } catch (error) {
+      statsWarning = `failed to load Tokenomy memory: ${error instanceof Error ? error.message : String(error)}`;
     }
     if (config.enabled) {
       const startupModel = findStartupModel(ctx, config);
@@ -1886,6 +2344,14 @@ export default function tokenomy(pi: ExtensionAPI) {
       Math.ceil((contextTokens ?? event.prompt.length) / 4000) *
       50;
     estimatedTokensSaved += promptSavings;
+    const memory = safeLoadProjectMemory(ctx.cwd);
+    const memoryInjection = buildMemoryInjection(
+      memory,
+      event.prompt,
+      analysis,
+      contextTokens,
+      config,
+    );
     const digest = safeLoadProjectDigest(ctx.cwd);
     const digestPrompt = shouldUseProjectDigest(
       digest,
@@ -1903,6 +2369,9 @@ export default function tokenomy(pi: ExtensionAPI) {
       stats.lifetimeEstimatedTokensSaved += promptSavings;
       stats.routedPrompts += 1;
       if (digestPrompt) stats.projectDigestUses += 1;
+      if (memoryInjection) {
+        stats.memoryInjections += 1;
+      }
       if (classifierPromptTelemetry?.guarded) {
         stats.compressionGuardRejections += 1;
       }
@@ -1919,8 +2388,10 @@ export default function tokenomy(pi: ExtensionAPI) {
           promptSavings,
           estimatedTokensSaved,
           classifierPromptTelemetry,
+          memoryInjection,
           config,
         );
+        markMemoryFactsUsed(ctx.cwd, memory, memoryInjection);
         statsWarning = undefined;
       } catch (error) {
         statsWarning = `failed to save Tokenomy stats/history: ${error instanceof Error ? error.message : String(error)}`;
@@ -1947,8 +2418,9 @@ export default function tokenomy(pi: ExtensionAPI) {
     if (!config.debug.dryRun) {
       try {
         updateProjectDigest(ctx.cwd, analysis, decision, config);
+        updateProjectMemory(ctx.cwd, analysis, decision, config);
       } catch (error) {
-        statsWarning = `failed to save Tokenomy project digest: ${error instanceof Error ? error.message : String(error)}`;
+        statsWarning = `failed to save Tokenomy project metadata: ${error instanceof Error ? error.message : String(error)}`;
       }
     }
 
@@ -1958,7 +2430,7 @@ export default function tokenomy(pi: ExtensionAPI) {
       config,
       estimatedTokensSaved,
     );
-    const additions = [digestPrompt, discipline].filter(Boolean);
+    const additions = [digestPrompt, memoryInjection?.text, discipline].filter(Boolean);
     if (!additions.length) return;
     return {
       systemPrompt: `${event.systemPrompt}\n\n${additions.join("\n\n")}`,
@@ -1967,7 +2439,7 @@ export default function tokenomy(pi: ExtensionAPI) {
 
   pi.registerCommand("tokenomy", {
     description:
-      "Show or change Tokenomy token-router status: /tokenomy [on|off|reload|status|explain|history|export-history|reset-history|reset-stats|dry-run on|dry-run off]",
+      "Show or change Tokenomy token-router status: /tokenomy [on|off|reload|status|explain|history|memory|export-history|reset-history|reset-stats|dry-run on|dry-run off]",
     handler: async (args, ctx) => {
       const action = args.trim().toLowerCase() || "status";
       if (action === "on") {
@@ -2052,6 +2524,71 @@ export default function tokenomy(pi: ExtensionAPI) {
         }
         return;
       }
+      if (action === "memory" || action === "memory status") {
+        const memory = safeLoadProjectMemory(ctx.cwd);
+        ctx.ui.notify(
+          [
+            memorySummary(memory, config),
+            `Memory file: ${projectMemoryPath(ctx.cwd)}`,
+          ].join("\n"),
+          "info",
+        );
+        return;
+      }
+      if (action === "memory show") {
+        const memory = safeLoadProjectMemory(ctx.cwd);
+        const facts = memory?.facts ?? [];
+        ctx.ui.notify(
+          facts.length
+            ? [
+                memorySummary(memory, config),
+                ...facts.slice(0, 30).map(formatMemoryFact),
+              ].join("\n")
+            : "Tokenomy project memory is empty",
+          "info",
+        );
+        return;
+      }
+      if (action === "memory refresh") {
+        try {
+          const memory = updateProjectMemory(ctx.cwd, undefined, undefined, config);
+          ctx.ui.notify(memorySummary(memory, config), "info");
+        } catch (error) {
+          ctx.ui.notify(
+            `Tokenomy memory warning: failed to refresh project memory: ${error instanceof Error ? error.message : String(error)}`,
+            "warning",
+          );
+        }
+        return;
+      }
+      if (action === "memory clear") {
+        try {
+          saveProjectMemory(ctx.cwd, {
+            version: 1,
+            project: basename(ctx.cwd),
+            updatedAt: new Date().toISOString(),
+            facts: [],
+          });
+          ctx.ui.notify("Tokenomy project memory cleared", "info");
+        } catch (error) {
+          ctx.ui.notify(
+            `Tokenomy memory warning: failed to clear project memory: ${error instanceof Error ? error.message : String(error)}`,
+            "warning",
+          );
+        }
+        return;
+      }
+      if (action === "memory on") {
+        config.memory.enabled = true;
+        config.memory.inject = true;
+        ctx.ui.notify("Tokenomy project memory enabled", "info");
+        return;
+      }
+      if (action === "memory off") {
+        config.memory.enabled = false;
+        ctx.ui.notify("Tokenomy project memory disabled", "info");
+        return;
+      }
       if (action === "explain") {
         if (!lastDecision) {
           ctx.ui.notify("Tokenomy has not made a routing decision yet", "info");
@@ -2095,6 +2632,7 @@ export default function tokenomy(pi: ExtensionAPI) {
         `Provider: ${config.provider}`,
         `Classifier: ${config.classifier.enabled ? "enabled" : "disabled"} (${config.classifier.onlyWhenAmbiguous ? "ambiguous only" : "all eligible"})`,
         `Telemetry: ${config.telemetry.enabled ? "enabled" : "disabled"} (${config.telemetry.maxEntries} max entries)`,
+        memorySummary(safeLoadProjectMemory(ctx.cwd), config),
         `Prompt simplification: ${config.promptSimplification.enabled ? "enabled" : "disabled"}`,
         `Prompt compression: ${config.promptSimplification.compressionEnabled ? "enabled" : "disabled"}`,
         `Tool management: ${config.tools.manage ? "enabled" : "disabled"}`,
@@ -2105,12 +2643,14 @@ export default function tokenomy(pi: ExtensionAPI) {
         `Tokenomy sessions lifetime: ${stats.sessionsStarted}`,
         `Classifier cache hits lifetime: ${stats.classifierCacheHits}`,
         `Project digest uses lifetime: ${stats.projectDigestUses}`,
+        `Memory injections lifetime: ${stats.memoryInjections}`,
         `Adaptive fallbacks lifetime: ${stats.adaptiveFallbacks}`,
         `Compression guard rejections lifetime: ${stats.compressionGuardRejections}`,
         `Baseline model: ${baselineModel ?? "unknown"}`,
         `Cache directory: ${cacheDir(ctx.cwd)}`,
         `Stats file: ${statsPath(ctx.cwd)}`,
         `Routing history file: ${routingHistoryPath(ctx.cwd)}`,
+        `Memory file: ${projectMemoryPath(ctx.cwd)}`,
         ...(statsWarning ? [`Stats warning: ${statsWarning}`] : []),
         `Config files: ${join(getAgentDir(), "tokenomy.json")} and ${join(ctx.cwd, CONFIG_DIR_NAME, "tokenomy.json")}`,
       ];

@@ -77,6 +77,12 @@ Useful commands inside Pi:
 /tokenomy reload
 /tokenomy explain
 /tokenomy history
+/tokenomy memory
+/tokenomy memory show
+/tokenomy memory refresh
+/tokenomy memory clear
+/tokenomy memory on
+/tokenomy memory off
 /tokenomy export-history
 /tokenomy reset-history
 /tokenomy reset-stats
@@ -87,6 +93,8 @@ Useful commands inside Pi:
 `/tokenomy status` shows the current routing state, last decision, and estimated tokens saved vs not using Tokenomy.
 `/tokenomy explain` shows the signals and reason for the last routing decision.
 `/tokenomy history` shows recent prompt-safe routing telemetry.
+`/tokenomy memory` shows local project memory status.
+`/tokenomy memory show` shows stored project facts.
 `/tokenomy export-history` shows the local routing history file path.
 `/tokenomy reset-stats` clears local lifetime counters.
 `/tokenomy reset-history` clears local routing history.
@@ -164,6 +172,15 @@ project digest from `.pi/tokenomy-cache/project-digest.json`. The digest stores
 routing metadata such as intent counts and last route, not prompt text or model
 responses.
 
+Tokenomy also keeps local per-project memory in
+`.pi/tokenomy-cache/project-memory.json`. Memory is enabled and injected by
+default. It stores short durable project facts such as package name, test
+commands, important implementation files, and release workflow hints. Memory is
+advisory: the current user prompt always overrides it. Tokenomy injects memory
+only when it is likely to save repeated discovery, for example release/debug
+work, vague project prompts, or large contexts. It does not store raw prompts or
+model responses.
+
 For large prompts that need classifier help, Tokenomy locally simplifies the
 classifier prompt first. It keeps head/tail context and signal lines such as
 errors, failed tests, file paths, and counts. The original user prompt is still
@@ -199,6 +216,8 @@ Safer defaults for sharing:
 - `promptSimplification.enabled` reduces classifier prompt size for large logs
 - `promptSimplification.compressionEnabled` controls local `tokenshrink`
   compression and defaults to `true`
+- `memory.enabled` and `memory.inject` control local project memory and both
+  default to `true`
 
 Default Codex model preferences are:
 
