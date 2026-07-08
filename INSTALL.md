@@ -1,6 +1,9 @@
 # Installation
 
-Tokenomy is distributed as a Pi package. Install it from git with `pi install`.
+Tokenomy is distributed as a Pi package. After installation, it automatically
+routes Pi/Codex prompts to cheaper models when safe, upshifts for risky work,
+and uses local project memory plus prompt compression to reduce repeated token
+spend without changing the final user prompt.
 
 ## Requirements
 
@@ -44,7 +47,7 @@ pi install git:git@github.com:adyshev/tokenomy
 For a pinned release or commit:
 
 ```bash
-pi install https://github.com/adyshev/tokenomy@v0.1.12-beta
+pi install https://github.com/adyshev/tokenomy@v0.1.13-beta
 ```
 
 `pi install` reads the `pi` manifest from `package.json` and enables the

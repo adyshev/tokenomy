@@ -1,7 +1,7 @@
 {
   "name": "tokenomy-pi",
-  "version": "0.1.12-beta",
-  "description": "Project-local Pi extension that routes Codex prompts by complexity and confidence.",
+  "version": "0.1.13-beta",
+  "description": "Automatic token-saving router for Pi/Codex that uses cheaper models when safe and preserves quality with confidence checks, local memory, and prompt compression.",
   "license": "MIT",
   "type": "module",
   "keywords": [
@@ -9,7 +9,10 @@
     "pi-extension",
     "codex",
     "routing",
-    "token-economy"
+    "token-economy",
+    "token-saving",
+    "model-router",
+    "prompt-compression"
   ],
   "files": [
     ".pi/extensions/tokenomy/index.ts",

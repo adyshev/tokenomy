@@ -3,18 +3,36 @@
 Status: beta. Tokenomy is suitable for private testing and early adopters, but
 it is not yet a general-purpose model router.
 
-Tokenomy is a project-local Pi extension for Codex users on the ChatGPT Plus
-plan. At this stage it is intentionally scoped to the `openai-codex` models
-available through Pi when a Plus/Pro Codex account is authenticated.
+Tokenomy helps Pi/Codex users spend fewer tokens without babysitting model
+choice. After installation, it automatically routes each prompt to the cheapest
+Codex model tier that is likely to succeed, raises the model for risky work, and
+uses local memory and prompt compression to avoid paying again for repeated
+project context.
 
-Its primary goal is:
+The goal is simple:
 
-> Minimize total token usage while preserving high-quality output.
+> Use the cheapest model that can still produce a high-quality result.
 
-Tokenomy routes each prompt to the cheapest model tier that should still handle
-the work well. Simple prompts go to the cheapest configured Codex model, complex
-or risky prompts move up to a stronger model, and uncertain prompts fall back to
-the cheapest model unless Tokenomy reaches the configured confidence threshold.
+Tokenomy is built for people who do a mix of quick questions, shell commands,
+debugging, edits, tests, and releases in the same project. Instead of running
+everything on the strongest model, Tokenomy keeps easy work cheap and reserves
+stronger models for prompts where a weak attempt would likely cost more through
+retries, extra tool calls, or bad edits.
+
+What you get by default:
+
+- cheaper routing for simple prompts and low-risk commands
+- automatic upshift for complex, risky, or release-like work
+- confidence-based fallback when the router is unsure
+- local project memory that remembers durable facts like test commands and
+  release workflow hints
+- classifier prompt simplification and TokenShrink compression for large logs
+- prompt-safety guards so compression does not rewrite protected signal lines
+- local telemetry showing routing decisions, estimated savings, and memory use
+
+Tokenomy does not rewrite the final user prompt sent to the selected model.
+Memory and compression apply only as advisory routing/context aids, and the
+current user prompt always wins.
 
 ## Current Scope
 
