@@ -163,6 +163,10 @@ classifier prompt first. It keeps head/tail context and signal lines such as
 errors, failed tests, file paths, and counts. The original user prompt is still
 sent to the selected agent model.
 
+Tokenomy also applies local TokenShrink compression to classifier prompts. It
+keeps the compressed version only when TokenShrink reports enough saved tokens,
+so compression should not increase routing cost.
+
 Tokenomy also adjusts thinking level by tier:
 
 - `simple`: minimal thinking
@@ -181,6 +185,7 @@ Safer defaults for sharing:
 - `tools.manage` is `false` unless you opt in
 - `debug.dryRun` lets you see routing without changing model/tool state
 - `promptSimplification.enabled` reduces classifier prompt size for large logs
+- classifier prompt compression uses the local `tokenshrink` SDK
 
 Default Codex model preferences are:
 
@@ -200,6 +205,11 @@ Then update `.pi/tokenomy.json`.
 
 Before public sharing, review `COMPATIBILITY.md`, `LIMITATIONS.md`, and
 `CHANGELOG.md`.
+
+Future direction: Tokenomy may add an optional local side-LLM path, such as
+Ollama or another local model, for heavier prompt compression and prompt
+complexity determination. The current release keeps compression deterministic
+and local through TokenShrink.
 
 ## Tests
 

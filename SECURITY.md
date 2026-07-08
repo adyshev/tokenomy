@@ -34,6 +34,10 @@ For large prompts, Tokenomy can simplify the classifier excerpt locally before
 the classifier call. This reduces prompt size but may still include relevant
 error lines, file paths, and counts from the user's prompt.
 
+TokenShrink prompt compression runs locally through the `tokenshrink` SDK and
+does not call external APIs. It is applied only to classifier excerpts, not to
+the original agent prompt.
+
 Set this to disable classifier calls:
 
 ```json

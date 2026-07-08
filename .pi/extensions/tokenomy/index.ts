@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { complete, type Api, type Model } from "@earendil-works/pi-ai/compat";
+import { compress as shrinkPrompt } from "tokenshrink";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -83,6 +84,7 @@ interface TokenomyConfig {
   };
   promptSimplification: {
     enabled: boolean;
+    minCompressionSavingsTokens: number;
     maxClassifierPromptChars: number;
     maxLineChars: number;
     headLines: number;
@@ -240,6 +242,7 @@ const DEFAULT_CONFIG: TokenomyConfig = {
   },
   promptSimplification: {
     enabled: true,
+    minCompressionSavingsTokens: 12,
     maxClassifierPromptChars: 1600,
     maxLineChars: 240,
     headLines: 16,
@@ -638,6 +641,15 @@ function validateConfig(config: TokenomyConfig): string[] {
   ) {
     warnings.push("promptSimplification.maxLineChars must be at least 80");
   }
+  if (
+    typeof config.promptSimplification.minCompressionSavingsTokens !==
+      "number" ||
+    config.promptSimplification.minCompressionSavingsTokens < 0
+  ) {
+    warnings.push(
+      "promptSimplification.minCompressionSavingsTokens must be a non-negative number",
+    );
+  }
   return warnings;
 }
 
@@ -694,18 +706,54 @@ function uniqueLines(lines: string[]): string[] {
   });
 }
 
+function compressPromptText(
+  text: string,
+  config: TokenomyConfig,
+): { text: string; compressed: boolean; tokensSaved: number } {
+  if (!config.promptSimplification.enabled) {
+    return { text, compressed: false, tokensSaved: 0 };
+  }
+
+  try {
+    const result = shrinkPrompt(text, { domain: "auto" });
+    const tokensSaved =
+      typeof result.stats?.tokensSaved === "number"
+        ? result.stats.tokensSaved
+        : 0;
+    if (
+      tokensSaved < config.promptSimplification.minCompressionSavingsTokens ||
+      !result.compressed ||
+      result.compressed === text
+    ) {
+      return { text, compressed: false, tokensSaved: 0 };
+    }
+    return { text: result.compressed, compressed: true, tokensSaved };
+  } catch {
+    // Compression is an optimization. Routing must continue with the raw text.
+    return { text, compressed: false, tokensSaved: 0 };
+  }
+}
+
 function simplifyPromptForClassifier(
   prompt: string,
   config: TokenomyConfig,
-): { text: string; simplified: boolean } {
+): {
+  text: string;
+  simplified: boolean;
+  compressed: boolean;
+  tokensSaved: number;
+} {
   if (!config.promptSimplification.enabled) {
+    const text = prompt.slice(0, config.classifier.maxPromptChars);
+    const compressed = compressPromptText(text, config);
     return {
-      text: prompt.slice(0, config.classifier.maxPromptChars),
+      ...compressed,
       simplified: false,
     };
   }
   if (prompt.length <= config.promptSimplification.maxClassifierPromptChars) {
-    return { text: prompt, simplified: false };
+    const compressed = compressPromptText(prompt, config);
+    return { ...compressed, simplified: false };
   }
 
   const lines = prompt
@@ -723,22 +771,26 @@ function simplifyPromptForClassifier(
     "[Tokenomy simplified prompt for routing/classification]",
     `Original chars: ${prompt.length}`,
     "",
-    "Head:",
-    ...head,
-    "",
     "Signal lines:",
     ...(signal.length ? signal : ["none"]),
+    "",
+    "Head:",
+    ...head,
     "",
     "Tail:",
     ...tail,
   ].join("\n");
 
+  const compressed = compressPromptText(simplified, config);
+
   return {
-    text: simplified.slice(
+    text: compressed.text.slice(
       0,
       config.promptSimplification.maxClassifierPromptChars,
     ),
     simplified: true,
+    compressed: compressed.compressed,
+    tokensSaved: compressed.tokensSaved,
   };
 }
 
@@ -1014,6 +1066,7 @@ function buildClassifierPrompt(
     `Current context tokens: ${contextTokens ?? "unknown"}`,
     `Prompt chars: ${prompt.length}`,
     `Prompt simplified: ${classifierPrompt.simplified ? "yes" : "no"}`,
+    `Prompt compressed: ${classifierPrompt.compressed ? `yes/${classifierPrompt.tokensSaved} tokens` : "no"}`,
     "",
     "User prompt:",
     classifierPrompt.text,

@@ -195,6 +195,7 @@ tokens and tool calls.
 {
   "promptSimplification": {
     "enabled": true,
+    "minCompressionSavingsTokens": 12,
     "maxClassifierPromptChars": 1600,
     "maxLineChars": 240,
     "headLines": 16,
@@ -210,3 +211,7 @@ model; simplification is only for routing/classification. It preserves head and
 tail context plus signal lines containing errors, failures, test names, file
 paths, and counts. Tokenomy also adds system guidance asking the agent to
 condense long command output before reasoning.
+
+Tokenomy uses the local `tokenshrink` SDK for token-aware compression. It keeps
+the compressed prompt only if TokenShrink reports at least
+`minCompressionSavingsTokens` saved tokens.
