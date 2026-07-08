@@ -1,50 +1,69 @@
 # Tokenomy Pi Extension
 
-Status: beta. Tokenomy is suitable for private testing and early adopters, but
-it is not yet a general-purpose model router.
+Tokenomy is a token-economy layer for Pi users working with Codex on the
+ChatGPT Plus/Pro plan. It is designed to reduce total token spend during normal
+project work without forcing you to manually choose a model for every prompt.
 
-Tokenomy helps Pi/Codex users spend fewer tokens without babysitting model
-choice. After installation, it automatically routes each prompt to the cheapest
-Codex model tier that is likely to succeed, raises the model for risky work, and
-uses local memory and prompt compression to avoid paying again for repeated
-project context.
+The product goal is:
 
-The goal is simple:
+> Spend fewer tokens while preserving the original prompt intent and the quality
+> of the final answer.
 
-> Use the cheapest model that can still produce a high-quality result.
+After installation, Tokenomy runs automatically before each agent turn. It
+classifies the prompt, chooses the cheapest Codex model tier that should still
+solve the task, and upshifts when the work looks risky, broad, or release-like.
+It also uses local project memory, classifier prompt simplification,
+TokenShrink compression, safety guards, and routing telemetry to reduce repeated
+context cost without rewriting the final user prompt.
 
-Tokenomy is built for people who do a mix of quick questions, shell commands,
-debugging, edits, tests, and releases in the same project. Instead of running
-everything on the strongest model, Tokenomy keeps easy work cheap and reserves
-stronger models for prompts where a weak attempt would likely cost more through
-retries, extra tool calls, or bad edits.
+Tokenomy is useful when the same project contains mixed work:
 
-What you get by default:
+- quick questions and explanations
+- cheap shell commands like `ls -l`
+- targeted reads and small edits
+- debugging and test failures
+- larger refactors or architecture work
+- release, version, and npm/GitHub Actions flows
 
-- cheaper routing for simple prompts and low-risk commands
-- automatic upshift for complex, risky, or release-like work
-- confidence-based fallback when the router is unsure
-- local project memory that remembers durable facts like test commands and
-  release workflow hints
-- classifier prompt simplification and TokenShrink compression for large logs
-- prompt-safety guards so compression does not rewrite protected signal lines
-- local telemetry showing routing decisions, estimated savings, and memory use
+Instead of sending all of that to the strongest available model, Tokenomy keeps
+easy work cheap and reserves stronger models for prompts where a weak attempt is
+likely to cost more through retries, excessive tool calls, or incorrect edits.
 
-Tokenomy does not rewrite the final user prompt sent to the selected model.
-Memory and compression apply only as advisory routing/context aids, and the
-current user prompt always wins.
+## What Tokenomy Does By Default
+
+- Routes simple and low-risk prompts to cheaper Codex models.
+- Upshifts complex, risky, debug, architecture, and release prompts.
+- Uses a confidence threshold before trusting classifier decisions.
+- Falls back conservatively when routing confidence is too low.
+- Learns local project memory such as package names, test commands, important
+  files, and release workflow hints.
+- Injects compact advisory memory only when it is likely to save repeated
+  discovery.
+- Simplifies and compresses large classifier prompts so routing itself stays
+  cheap.
+- Rejects compression when protected signal lines would be rewritten or dropped.
+- Tracks local telemetry for routing decisions, estimated savings, memory use,
+  and compression guard activity.
+
+Tokenomy does not rewrite the final prompt sent to the selected agent model.
+Memory and compression are routing/context optimizations only, and the current
+user prompt always overrides remembered project facts.
 
 ## Current Scope
 
-Tokenomy is built for:
+Tokenomy is currently focused on one well-defined setup:
 
-- Pi users running the ChatGPT Plus/Pro Codex provider
-- the `openai-codex` model family exposed by Pi
-- local project routing through `.pi/extensions/tokenomy/index.ts`
+- Pi users authenticated with ChatGPT Plus/Pro Codex access.
+- The `openai-codex` model family exposed by Pi.
+- Project-local routing through `.pi/extensions/tokenomy/index.ts`.
+- Local-only memory, cache, telemetry, and compression. No external database or
+  external memory API is used.
 
-It is not currently a general-purpose router for every provider or every model
-catalog. Other providers can be added later, but the defaults, model ranking,
-and configuration in this repo assume Codex models available to Plus/Pro users.
+Tokenomy is still beta software. It is ready for private dogfooding and early
+adopter use, but it is not yet a universal model router for every provider,
+model catalog, or coding-agent runtime. Other providers and Codex-native
+adapters can be added later; the current defaults are intentionally optimized
+for Codex models available to Plus/Pro users through Pi.
 
 ## Files
 
@@ -61,13 +80,13 @@ and configuration in this repo assume Codex models available to Plus/Pro users.
 See `INSTALL.md` for full setup steps. The short version is:
 
 ```bash
-pi install https://github.com/adyshev/tokenomy
+pi install npm:tokenomy-pi
 ```
 
 For project-local install:
 
 ```bash
-pi install -l https://github.com/adyshev/tokenomy
+pi install -l npm:tokenomy-pi
 ```
 
 Then authenticate Codex in Pi and start Pi from the target project.
@@ -248,7 +267,7 @@ If you want the fallback selection to be smarter than string sorting, Tokenomy u
 If your available model list differs, run:
 
 ```bash
-pi --list-models | grep openai-codex
+pi --list-models openai-codex
 ```
 
 Then update `.pi/tokenomy.json`.
@@ -272,5 +291,6 @@ npm test
 The tests use Node's built-in test runner and a mocked Pi runtime. They verify
 that Tokenomy starts on the configured complex baseline model, downshifts for a
 simple prompt, upshifts again for a complex prompt, uses risk-aware fallback,
-reuses classifier cache entries, and injects compact project digests for large
-contexts.
+reuses classifier cache entries, injects compact project digests for large
+contexts, learns local project memory, records telemetry, and rejects unsafe
+classifier prompt compression.

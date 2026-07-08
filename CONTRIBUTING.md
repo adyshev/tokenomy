@@ -67,6 +67,9 @@ pi list
 ## Change Guidelines
 
 - Keep public defaults conservative.
+- Keep `README.md`, `INSTALL.md`, `CONFIG.md`, `COMPATIBILITY.md`,
+  `LIMITATIONS.md`, `SECURITY.md`, and `CHANGELOG.md` aligned with behavior and
+  design decisions.
 - Do not enable write-capable tool management by default.
 - Do not store prompt text or model responses in stats files.
 - Add or update tests for routing behavior changes.
@@ -91,6 +94,7 @@ Before tagging a release:
 
 - `npm test` passes
 - `pi --offline --approve --no-session --list-models openai-codex` loads the extension
-- README install instructions still match Pi behavior
+- README and INSTALL recommend the current install path
+- CONFIG, SECURITY, COMPATIBILITY, and LIMITATIONS match the implemented defaults
 - `CHANGELOG.md` has a dated version entry
 - compatibility notes mention any Pi API assumptions
