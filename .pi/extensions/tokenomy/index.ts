@@ -1123,6 +1123,32 @@ function hasAny(lower: string, patterns: RegExp[]): boolean {
   return patterns.some((pattern) => pattern.test(lower));
 }
 
+function shouldBypassForLanguage(prompt: string): boolean {
+  const lower = prompt.toLowerCase();
+  const englishInstructionSignals = [
+    /\b(please|help|can you|could you|would you|do|run|perform|review|audit|scan|inspect|refactor|fix|debug|explain|summari[sz]e|translate|keep|preserve|change|update|implement|read|check)\b/,
+    /\b(this|the)\s+(text|comment|string|message|file|prompt|translation|output|error|log|code)\b/,
+  ];
+  if (hasAny(lower, englishInstructionSignals)) return false;
+
+  const letters = Array.from(prompt.matchAll(/\p{L}/gu), (match) => match[0]);
+  if (letters.length < 4) return false;
+
+  const latinLetters = letters.filter((char) => /\p{Script=Latin}/u.test(char))
+    .length;
+  const nonLatinLetters = letters.length - latinLetters;
+  if (nonLatinLetters === 0) return false;
+
+  const codeOrPathSignals = [
+    /[`{}[\]();=<>]/,
+    /(^|\s)(\.?\/|~\/|src\/|lib\/|app\/|test\/|tests\/|\.pi\/|\.github\/)[\w./-]+/,
+    /\b[\w.-]+\.(ts|tsx|js|jsx|mjs|cjs|json|md|py|rs|go|rb|java|kt|yml|yaml|toml|lock|lua|vim)\b/i,
+  ];
+  if (hasAny(prompt, codeOrPathSignals)) return false;
+
+  return nonLatinLetters / letters.length >= 0.2;
+}
+
 function isSignalLine(line: string): boolean {
   return hasAny(line.toLowerCase(), [
     /\b(error|fail|failed|failure|exception|traceback|stack trace|warning|warn|fatal|panic|assert|expected|actual)\b/,
@@ -1432,14 +1458,24 @@ function analyzePrompt(
   const auditReview = hasAny(lower, [
     /\b(final\s+scan|scan|audit|review|inspect)\b/,
   ]);
+  const broadReviewCandidate = hasAny(lower, [
+    /\b(full|complete|comprehensive|global|deep)\s+(audit|review|scan|inspect|refactor)\b/,
+    /\b(do|run|perform)\s+an?\s+(audit|review|scan|inspection|refactor)\b/,
+    /^\s*(please\s+)?(do|run|perform)?\s*(an?\s+)?(audit|review|scan|inspect|refactor)\s*[.!?]*\s*$/,
+    /\b(audit|review|scan|inspect|refactor)\s+(the\s+)?(repo|repository|project|codebase)\b/,
+  ]);
   const qualityReview = hasAny(lower, [
     /\b(optimal|optimi[sz]ed?|dead[- ]code[- ]free|dead code|up[- ]to[- ]date|outdated|unused|stale|cleanup|clean up)\b/,
   ]);
   const configTarget = hasAny(lower, [
     /\b(nvim|neovim|vim|tmux|dotfiles?|shell config|zsh|bashrc|config(?:uration)?s?)\b/,
   ]);
+  const broadReview = broadReviewCandidate && !(qualityReview || configTarget);
   if (auditReview && (qualityReview || configTarget)) {
     add(4, "config-audit");
+  }
+  if (broadReview) {
+    add(7, "broad-review");
   }
   if (
     hasAny(lower, [
@@ -2153,16 +2189,30 @@ function formatTokenomyFooter(
   stats: TokenomyStats,
 ): string {
   if (!enabled) {
-    return `off saved:${sessionSaved} lifetime:${stats.lifetimeEstimatedTokensSaved}`;
+    return `Tokenomy off saved:${sessionSaved} lifetime:${stats.lifetimeEstimatedTokensSaved}`;
   }
   if (!decision) {
-    return `on saved:${sessionSaved} lifetime:${stats.lifetimeEstimatedTokensSaved}`;
+    return `Tokenomy on saved:${sessionSaved} lifetime:${stats.lifetimeEstimatedTokensSaved}`;
   }
   const confidence =
     decision.confidence === undefined
       ? ""
       : `/${Math.round(decision.confidence * 100)}%`;
-  return `${decision.tier}:${decision.source}${confidence} saved:${sessionSaved} lifetime:${stats.lifetimeEstimatedTokensSaved}`;
+  return `Tokenomy ${decision.tier}:${decision.source}${confidence} saved:${sessionSaved} lifetime:${stats.lifetimeEstimatedTokensSaved}`;
+}
+
+function refreshTokenomyFooter(
+  ctx: ExtensionContext,
+  config: TokenomyConfig,
+  decision: RouterDecision | undefined,
+  sessionSaved: number,
+  stats: TokenomyStats,
+): void {
+  if (!config.ui.status || !ctx.hasUI) return;
+  ctx.ui.setStatus(
+    "tokenomy",
+    formatTokenomyFooter(config.enabled, decision, sessionSaved, stats),
+  );
 }
 
 function memorySummary(memory: ProjectMemory | undefined, config: TokenomyConfig): string {
@@ -2219,17 +2269,7 @@ export default function tokenomy(pi: ExtensionAPI) {
       }
     }
     estimatedTokensSaved = 0;
-    if (config.ui.status && ctx.hasUI) {
-      ctx.ui.setStatus(
-        "tokenomy",
-        formatTokenomyFooter(
-          config.enabled,
-          lastDecision,
-          estimatedTokensSaved,
-          stats,
-        ),
-      );
-    }
+    refreshTokenomyFooter(ctx, config, lastDecision, estimatedTokensSaved, stats);
     if (configWarnings.length && ctx.hasUI) {
       ctx.ui.notify(`Tokenomy config warnings:\n- ${configWarnings.join("\n- ")}`, "warning");
     }
@@ -2241,6 +2281,7 @@ export default function tokenomy(pi: ExtensionAPI) {
   pi.on("input", (event, ctx) => {
     if (!config.enabled || event.source === "extension")
       return { action: "continue" as const };
+    if (shouldBypassForLanguage(event.text)) return { action: "continue" as const };
     const usage = ctx.getContextUsage();
     const imageCount = event.images?.length ?? 0;
     const analysis = analyzePrompt(
@@ -2255,6 +2296,7 @@ export default function tokenomy(pi: ExtensionAPI) {
 
   pi.on("before_agent_start", async (event, ctx) => {
     if (!config.enabled) return;
+    if (shouldBypassForLanguage(event.prompt)) return;
 
     const usage = ctx.getContextUsage();
     const contextTokens = usage?.tokens;
@@ -2456,17 +2498,7 @@ export default function tokenomy(pi: ExtensionAPI) {
         }
       }
     }
-    if (config.ui.status && ctx.hasUI) {
-      ctx.ui.setStatus(
-        "tokenomy",
-        formatTokenomyFooter(
-          config.enabled,
-          decision,
-          estimatedTokensSaved,
-          stats,
-        ),
-      );
-    }
+    refreshTokenomyFooter(ctx, config, decision, estimatedTokensSaved, stats);
     if (config.ui.notifyDecisions && ctx.hasUI) {
       ctx.ui.notify(
         `Tokenomy: ${tier} via ${source} -> ${decision.model ?? "current model"}, thinking:${thinking}`,
@@ -2503,29 +2535,13 @@ export default function tokenomy(pi: ExtensionAPI) {
       const action = args.trim().toLowerCase() || "status";
       if (action === "on") {
         config.enabled = true;
-        ctx.ui.setStatus(
-          "tokenomy",
-          formatTokenomyFooter(
-            config.enabled,
-            lastDecision,
-            estimatedTokensSaved,
-            stats,
-          ),
-        );
+        refreshTokenomyFooter(ctx, config, lastDecision, estimatedTokensSaved, stats);
         ctx.ui.notify("Tokenomy enabled", "info");
         return;
       }
       if (action === "off") {
         config.enabled = false;
-        ctx.ui.setStatus(
-          "tokenomy",
-          formatTokenomyFooter(
-            config.enabled,
-            lastDecision,
-            estimatedTokensSaved,
-            stats,
-          ),
-        );
+        refreshTokenomyFooter(ctx, config, lastDecision, estimatedTokensSaved, stats);
         ctx.ui.notify("Tokenomy disabled", "info");
         return;
       }
@@ -2688,15 +2704,7 @@ export default function tokenomy(pi: ExtensionAPI) {
         const loaded = loadConfig(ctx.cwd);
         config = loaded.config;
         configWarnings = loaded.warnings;
-        ctx.ui.setStatus(
-          "tokenomy",
-          formatTokenomyFooter(
-            config.enabled,
-            lastDecision,
-            estimatedTokensSaved,
-            stats,
-          ),
-        );
+        refreshTokenomyFooter(ctx, config, lastDecision, estimatedTokensSaved, stats);
         ctx.ui.notify(
           configWarnings.length
             ? `Tokenomy config reloaded with warnings:\n- ${configWarnings.join("\n- ")}`
@@ -2734,6 +2742,7 @@ export default function tokenomy(pi: ExtensionAPI) {
         ...(statsWarning ? [`Stats warning: ${statsWarning}`] : []),
         `Config files: ${join(getAgentDir(), "tokenomy.json")} and ${join(ctx.cwd, CONFIG_DIR_NAME, "tokenomy.json")}`,
       ];
+      refreshTokenomyFooter(ctx, config, lastDecision, estimatedTokensSaved, stats);
       ctx.ui.notify(lines.join("\n"), "info");
     },
   });
