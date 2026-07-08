@@ -556,6 +556,27 @@ test("routes short quality audit prompts to medium", async () => {
   );
 });
 
+test("routes broad review prompts to the complex model", async () => {
+  const harness = createHarness(createProjectConfig());
+  await startSession(harness);
+
+  for (const prompt of [
+    "please do an audit",
+    "please review",
+    "please refactor",
+    "review the codebase",
+  ]) {
+    await routePrompt(harness, prompt);
+
+    assert.equal(harness.selectedModels.at(-1), "openai-codex/gpt-5.5");
+    assert.equal(harness.thinkingLevels.at(-1), "medium");
+    assert.match(
+      harness.notifications.at(-1).message,
+      /Tokenomy: complex via local -> openai-codex\/gpt-5\.5, thinking:medium/,
+    );
+  }
+});
+
 test("routes state-changing local workflows to medium locally", async () => {
   const harness = createHarness(createProjectConfig());
   await startSession(harness);

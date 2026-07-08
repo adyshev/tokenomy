@@ -1432,14 +1432,24 @@ function analyzePrompt(
   const auditReview = hasAny(lower, [
     /\b(final\s+scan|scan|audit|review|inspect)\b/,
   ]);
+  const broadReviewCandidate = hasAny(lower, [
+    /\b(full|complete|comprehensive|global|deep)\s+(audit|review|scan|inspect|refactor)\b/,
+    /\b(do|run|perform)\s+an?\s+(audit|review|scan|inspection|refactor)\b/,
+    /^\s*(please\s+)?(do|run|perform)?\s*(an?\s+)?(audit|review|scan|inspect|refactor)\s*[.!?]*\s*$/,
+    /\b(audit|review|scan|inspect|refactor)\s+(the\s+)?(repo|repository|project|codebase)\b/,
+  ]);
   const qualityReview = hasAny(lower, [
     /\b(optimal|optimi[sz]ed?|dead[- ]code[- ]free|dead code|up[- ]to[- ]date|outdated|unused|stale|cleanup|clean up)\b/,
   ]);
   const configTarget = hasAny(lower, [
     /\b(nvim|neovim|vim|tmux|dotfiles?|shell config|zsh|bashrc|config(?:uration)?s?)\b/,
   ]);
+  const broadReview = broadReviewCandidate && !(qualityReview || configTarget);
   if (auditReview && (qualityReview || configTarget)) {
     add(4, "config-audit");
+  }
+  if (broadReview) {
+    add(7, "broad-review");
   }
   if (
     hasAny(lower, [

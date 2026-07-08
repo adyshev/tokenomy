@@ -187,6 +187,11 @@ directly to the simple tier. If the prompt looks risky or likely to need edits,
 multi-step reasoning, broad code inspection, or careful design work, it routes
 to a stronger tier.
 
+Broad review prompts such as `please do an audit`, `please review`, or
+`please refactor` are treated as deep project work and route to the complex
+tier. Targeted audits, such as focused config or dotfiles checks, can still
+route to the medium tier when the scope is narrower.
+
 For ambiguous prompts, Tokenomy can ask the cheapest configured classifier model
 for a tiny JSON decision. The classifier is only accepted when its confidence is
 at least `classifier.minConfidence`, which is `0.95` by default. Accepted
