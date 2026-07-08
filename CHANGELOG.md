@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+- Added local workflow routing for state-changing git/tool chains such as
+  `commit & push`, while keeping read-only git inspection prompts cheap.
 
 ## 0.1.15-beta - 2026-07-08
 - Fixed short config-audit prompts such as nvim/tmux final scans routing to

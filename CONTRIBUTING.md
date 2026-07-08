@@ -23,6 +23,12 @@ make real model calls.
 GitHub Actions runs JSON validation and `npm test` on every push and pull
 request targeting `main`.
 
+## Branch And PR Policy
+
+All delivered features and fixes must be developed on a separate branch and
+merged through a pull request. Do not commit directly to `main`, even for small
+changes. Version bumps for releases should also happen in the release PR.
+
 ## NPM Releases
 
 NPM publishing is automated after changes merge to `main`.
@@ -83,6 +89,8 @@ Routing changes should cover at least:
 
 - simple prompt downshift
 - complex prompt upshift
+- state-changing local workflow upshift
+- read-only shell/git inspection staying cheap
 - low-confidence fallback
 - classifier accepted and rejected decisions
 - missing configured model fallback

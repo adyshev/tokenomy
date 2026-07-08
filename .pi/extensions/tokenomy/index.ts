@@ -23,6 +23,7 @@ type PromptIntent =
   | "multi_edit"
   | "debug"
   | "architecture"
+  | "local_workflow"
   | "release";
 type RiskLevel = "low" | "medium" | "high";
 
@@ -1323,6 +1324,14 @@ function simplifyPromptForClassifier(
   };
 }
 
+function isLocalWorkflowPrompt(lower: string): boolean {
+  return hasAny(lower, [
+    /\b(commit|push|commit\s*&\s*push|commit\s+and\s+push|stage changes?|staging|amend commit|create commit)\b/,
+    /\b(git\s+)?(rebase|merge|cherry-pick|stash|pull|push tags?)\b/,
+    /\b(resolve conflicts?|tag release|create tag|push tag)\b/,
+  ]);
+}
+
 function classifyIntent(lower: string, toolProfile: ToolProfile): PromptIntent {
   if (
     hasAny(lower.trim(), [
@@ -1359,6 +1368,7 @@ function classifyIntent(lower: string, toolProfile: ToolProfile): PromptIntent {
   ) {
     return "multi_edit";
   }
+  if (isLocalWorkflowPrompt(lower)) return "local_workflow";
   if (toolProfile === "write") return "single_edit";
   if (toolProfile === "read") return "read";
   return "answer";
@@ -1371,6 +1381,7 @@ function riskForIntent(
 ): RiskLevel {
   if (intent === "shell_simple") return "low";
   if (intent === "architecture" || intent === "release") return "high";
+  if (intent === "local_workflow") return "medium";
   if (intent === "debug" || intent === "multi_edit") return "medium";
   if (toolProfile === "write") return "medium";
   if ((contextTokens ?? 0) >= 80_000) return "medium";
@@ -1437,6 +1448,10 @@ function analyzePrompt(
   ) {
     add(2, "code-change");
   }
+  const localWorkflow = isLocalWorkflowPrompt(lower);
+  if (localWorkflow) {
+    add(5, "local-workflow");
+  }
   if (hasAny(lower, [/\b(plan|design|investigate|analy[sz]e|review|audit|scan)\b/])) {
     add(1, "analysis-needed");
   }
@@ -1460,7 +1475,8 @@ function analyzePrompt(
   if (
     hasAny(lower, [
       /\b(fix|implement|add|change|modify|edit|write|create|delete|remove|refactor|migrate|update|patch|test)\b/,
-    ])
+    ]) ||
+    localWorkflow
   ) {
     toolProfile = "write";
   }
@@ -1474,7 +1490,10 @@ function analyzePrompt(
   else if (intent === "release" || intent === "architecture") tier = "complex";
   else if (
     tier === "simple" &&
-    (intent === "debug" || intent === "multi_edit" || intent === "single_edit")
+    (intent === "debug" ||
+      intent === "multi_edit" ||
+      intent === "single_edit" ||
+      intent === "local_workflow")
   ) {
     tier = "medium";
   }
