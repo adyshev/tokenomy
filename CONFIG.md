@@ -209,10 +209,11 @@ need no tools, read-only tools, or write-capable tools.
 `notifyDecisions` shows a notification after each routing decision. Set it to
 `false` if the notifications are too noisy.
 
-`status` controls Tokenomy's compact Pi status/footer entry. Tokenomy writes
-only its own `tokenomy` entry, for example
-`Tokenomy medium:local/96% saved:1300 lifetime:22350`, and does not overwrite
-status entries owned by other plugins.
+`status` controls optional auxiliary Pi status entries, such as tool-policy
+status when tool management is explicitly enabled. Tokenomy does not write a
+main footer/status entry by default because shared footer space can conflict
+with other extensions. Use `/tokenomy status` and `/tokenomy history` for stable
+Tokenomy telemetry.
 
 ## Debug
 

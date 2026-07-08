@@ -2182,39 +2182,6 @@ function formatRoutingHistoryEntry(entry: RoutingHistoryEntry): string {
   ].join(" | ");
 }
 
-function formatTokenomyFooter(
-  enabled: boolean,
-  decision: RouterDecision | undefined,
-  sessionSaved: number,
-  stats: TokenomyStats,
-): string {
-  if (!enabled) {
-    return `Tokenomy off saved:${sessionSaved} lifetime:${stats.lifetimeEstimatedTokensSaved}`;
-  }
-  if (!decision) {
-    return `Tokenomy on saved:${sessionSaved} lifetime:${stats.lifetimeEstimatedTokensSaved}`;
-  }
-  const confidence =
-    decision.confidence === undefined
-      ? ""
-      : `/${Math.round(decision.confidence * 100)}%`;
-  return `Tokenomy ${decision.tier}:${decision.source}${confidence} saved:${sessionSaved} lifetime:${stats.lifetimeEstimatedTokensSaved}`;
-}
-
-function refreshTokenomyFooter(
-  ctx: ExtensionContext,
-  config: TokenomyConfig,
-  decision: RouterDecision | undefined,
-  sessionSaved: number,
-  stats: TokenomyStats,
-): void {
-  if (!config.ui.status || !ctx.hasUI) return;
-  ctx.ui.setStatus(
-    "tokenomy",
-    formatTokenomyFooter(config.enabled, decision, sessionSaved, stats),
-  );
-}
-
 function memorySummary(memory: ProjectMemory | undefined, config: TokenomyConfig): string {
   const facts = memory?.facts ?? [];
   const stale = facts.filter((fact) => factIsStale(fact, config)).length;
@@ -2269,7 +2236,6 @@ export default function tokenomy(pi: ExtensionAPI) {
       }
     }
     estimatedTokensSaved = 0;
-    refreshTokenomyFooter(ctx, config, lastDecision, estimatedTokensSaved, stats);
     if (configWarnings.length && ctx.hasUI) {
       ctx.ui.notify(`Tokenomy config warnings:\n- ${configWarnings.join("\n- ")}`, "warning");
     }
@@ -2498,7 +2464,6 @@ export default function tokenomy(pi: ExtensionAPI) {
         }
       }
     }
-    refreshTokenomyFooter(ctx, config, decision, estimatedTokensSaved, stats);
     if (config.ui.notifyDecisions && ctx.hasUI) {
       ctx.ui.notify(
         `Tokenomy: ${tier} via ${source} -> ${decision.model ?? "current model"}, thinking:${thinking}`,
@@ -2535,13 +2500,11 @@ export default function tokenomy(pi: ExtensionAPI) {
       const action = args.trim().toLowerCase() || "status";
       if (action === "on") {
         config.enabled = true;
-        refreshTokenomyFooter(ctx, config, lastDecision, estimatedTokensSaved, stats);
         ctx.ui.notify("Tokenomy enabled", "info");
         return;
       }
       if (action === "off") {
         config.enabled = false;
-        refreshTokenomyFooter(ctx, config, lastDecision, estimatedTokensSaved, stats);
         ctx.ui.notify("Tokenomy disabled", "info");
         return;
       }
@@ -2704,7 +2667,6 @@ export default function tokenomy(pi: ExtensionAPI) {
         const loaded = loadConfig(ctx.cwd);
         config = loaded.config;
         configWarnings = loaded.warnings;
-        refreshTokenomyFooter(ctx, config, lastDecision, estimatedTokensSaved, stats);
         ctx.ui.notify(
           configWarnings.length
             ? `Tokenomy config reloaded with warnings:\n- ${configWarnings.join("\n- ")}`
@@ -2742,7 +2704,6 @@ export default function tokenomy(pi: ExtensionAPI) {
         ...(statsWarning ? [`Stats warning: ${statsWarning}`] : []),
         `Config files: ${join(getAgentDir(), "tokenomy.json")} and ${join(ctx.cwd, CONFIG_DIR_NAME, "tokenomy.json")}`,
       ];
-      refreshTokenomyFooter(ctx, config, lastDecision, estimatedTokensSaved, stats);
       ctx.ui.notify(lines.join("\n"), "info");
     },
   });
