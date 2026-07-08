@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+
+## 0.1.19-beta - 2026-07-08
 - Kept trivial general prompts and single-command local info questions such as
   `how time is it?` on the cheapest model even in large project contexts.
 
