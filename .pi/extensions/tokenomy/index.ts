@@ -84,6 +84,7 @@ interface TokenomyConfig {
   };
   promptSimplification: {
     enabled: boolean;
+    compressionEnabled: boolean;
     minCompressionSavingsTokens: number;
     maxClassifierPromptChars: number;
     maxLineChars: number;
@@ -242,6 +243,7 @@ const DEFAULT_CONFIG: TokenomyConfig = {
   },
   promptSimplification: {
     enabled: true,
+    compressionEnabled: true,
     minCompressionSavingsTokens: 12,
     maxClassifierPromptChars: 1600,
     maxLineChars: 240,
@@ -642,6 +644,11 @@ function validateConfig(config: TokenomyConfig): string[] {
     warnings.push("promptSimplification.maxLineChars must be at least 80");
   }
   if (
+    typeof config.promptSimplification.compressionEnabled !== "boolean"
+  ) {
+    warnings.push("promptSimplification.compressionEnabled must be a boolean");
+  }
+  if (
     typeof config.promptSimplification.minCompressionSavingsTokens !==
       "number" ||
     config.promptSimplification.minCompressionSavingsTokens < 0
@@ -710,7 +717,7 @@ function compressPromptText(
   text: string,
   config: TokenomyConfig,
 ): { text: string; compressed: boolean; tokensSaved: number } {
-  if (!config.promptSimplification.enabled) {
+  if (!config.promptSimplification.compressionEnabled) {
     return { text, compressed: false, tokensSaved: 0 };
   }
 
@@ -1728,6 +1735,7 @@ export default function tokenomy(pi: ExtensionAPI) {
         `Provider: ${config.provider}`,
         `Classifier: ${config.classifier.enabled ? "enabled" : "disabled"} (${config.classifier.onlyWhenAmbiguous ? "ambiguous only" : "all eligible"})`,
         `Prompt simplification: ${config.promptSimplification.enabled ? "enabled" : "disabled"}`,
+        `Prompt compression: ${config.promptSimplification.compressionEnabled ? "enabled" : "disabled"}`,
         `Tool management: ${config.tools.manage ? "enabled" : "disabled"}`,
         `Last decision: ${lastDecision ? `${lastDecision.tier} via ${lastDecision.source}, model=${lastDecision.model ?? "none"}, thinking=${lastDecision.thinking}, reason=${lastDecision.reason}` : "none"}`,
         `Estimated tokens saved this session: ${estimatedTokensSaved}`,

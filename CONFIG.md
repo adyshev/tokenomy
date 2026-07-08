@@ -195,6 +195,7 @@ tokens and tool calls.
 {
   "promptSimplification": {
     "enabled": true,
+    "compressionEnabled": true,
     "minCompressionSavingsTokens": 12,
     "maxClassifierPromptChars": 1600,
     "maxLineChars": 240,
@@ -205,13 +206,15 @@ tokens and tool calls.
 }
 ```
 
-When enabled, Tokenomy locally simplifies large prompts before sending them to
-the cheap classifier model. The original prompt still goes to the selected agent
-model; simplification is only for routing/classification. It preserves head and
-tail context plus signal lines containing errors, failures, test names, file
-paths, and counts. Tokenomy also adds system guidance asking the agent to
-condense long command output before reasoning.
+When `enabled` is true, Tokenomy locally simplifies large prompts before sending
+them to the cheap classifier model. The original prompt still goes to the
+selected agent model; simplification is only for routing/classification. It
+preserves head and tail context plus signal lines containing errors, failures,
+test names, file paths, and counts. Tokenomy also adds system guidance asking
+the agent to condense long command output before reasoning.
 
-Tokenomy uses the local `tokenshrink` SDK for token-aware compression. It keeps
-the compressed prompt only if TokenShrink reports at least
-`minCompressionSavingsTokens` saved tokens.
+When `compressionEnabled` is true, Tokenomy uses the local `tokenshrink` SDK for
+token-aware compression of classifier excerpts. It keeps the compressed prompt
+only if TokenShrink reports at least `minCompressionSavingsTokens` saved tokens.
+Set `compressionEnabled` to `false` to keep structural simplification but skip
+TokenShrink compression.

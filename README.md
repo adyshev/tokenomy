@@ -165,7 +165,9 @@ sent to the selected agent model.
 
 Tokenomy also applies local TokenShrink compression to classifier prompts. It
 keeps the compressed version only when TokenShrink reports enough saved tokens,
-so compression should not increase routing cost.
+so compression should not increase routing cost. TokenShrink compression is
+enabled by default and can be disabled with
+`promptSimplification.compressionEnabled: false`.
 
 Tokenomy also adjusts thinking level by tier:
 
@@ -185,7 +187,8 @@ Safer defaults for sharing:
 - `tools.manage` is `false` unless you opt in
 - `debug.dryRun` lets you see routing without changing model/tool state
 - `promptSimplification.enabled` reduces classifier prompt size for large logs
-- classifier prompt compression uses the local `tokenshrink` SDK
+- `promptSimplification.compressionEnabled` controls local `tokenshrink`
+  compression and defaults to `true`
 
 Default Codex model preferences are:
 
