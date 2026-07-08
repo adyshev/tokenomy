@@ -51,6 +51,10 @@ interface TokenomyConfig {
     maxClassifierEntries: number;
     projectDigest: boolean;
   };
+  telemetry: {
+    enabled: boolean;
+    maxEntries: number;
+  };
   distillation: {
     enabled: boolean;
     minContextTokens: number;
@@ -173,6 +177,33 @@ interface ProjectDigest {
   lastSignals?: string[];
 }
 
+interface RoutingHistoryEntry {
+  id: string;
+  at: string;
+  promptHash: string;
+  promptChars: number;
+  contextBucket: string;
+  imageCount: number;
+  intent: PromptIntent;
+  risk: RiskLevel;
+  toolProfile: ToolProfile;
+  tier: Tier;
+  source: RouterDecision["source"];
+  confidence?: number;
+  model?: string;
+  thinking: ThinkingLevel;
+  signals: string[];
+  estimatedClassifierTokens: number;
+  estimatedTokensSaved: number;
+  sessionEstimatedTokensSaved: number;
+  promptSimplificationEnabled: boolean;
+  promptCompressionEnabled: boolean;
+}
+
+interface RoutingHistory {
+  entries: RoutingHistoryEntry[];
+}
+
 const BUILTIN_TOOL_NAMES = new Set([
   "read",
   "write",
@@ -209,6 +240,10 @@ const DEFAULT_CONFIG: TokenomyConfig = {
     classifierTtlMs: 7 * 24 * 60 * 60 * 1000,
     maxClassifierEntries: 200,
     projectDigest: true,
+  },
+  telemetry: {
+    enabled: true,
+    maxEntries: 200,
   },
   distillation: {
     enabled: true,
@@ -326,6 +361,10 @@ function projectDigestPath(cwd: string): string {
   return join(cacheDir(cwd), "project-digest.json");
 }
 
+function routingHistoryPath(cwd: string): string {
+  return join(cacheDir(cwd), "routing-history.json");
+}
+
 function safeInt(value: unknown): number {
   return typeof value === "number" ? Math.max(0, Math.round(value)) : 0;
 }
@@ -368,6 +407,53 @@ function saveStats(cwd: string, stats: TokenomyStats): void {
   const path = statsPath(cwd);
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+}
+
+function loadRoutingHistory(cwd: string): RoutingHistory {
+  const parsed = loadJson(routingHistoryPath(cwd));
+  if (!isObject(parsed) || !Array.isArray(parsed.entries)) {
+    return { entries: [] };
+  }
+  return {
+    entries: parsed.entries.filter(
+      (entry): entry is RoutingHistoryEntry =>
+        isObject(entry) &&
+        typeof entry.id === "string" &&
+        typeof entry.at === "string" &&
+        typeof entry.promptHash === "string" &&
+        typeof entry.promptChars === "number" &&
+        typeof entry.contextBucket === "string" &&
+        typeof entry.imageCount === "number" &&
+        typeof entry.intent === "string" &&
+        typeof entry.risk === "string" &&
+        typeof entry.toolProfile === "string" &&
+        (entry.tier === "simple" ||
+          entry.tier === "medium" ||
+          entry.tier === "complex") &&
+        (entry.source === "local" ||
+          entry.source === "classifier" ||
+          entry.source === "classifier-cache" ||
+          entry.source === "fallback") &&
+        typeof entry.thinking === "string" &&
+        Array.isArray(entry.signals) &&
+        typeof entry.estimatedClassifierTokens === "number" &&
+        typeof entry.estimatedTokensSaved === "number" &&
+        typeof entry.sessionEstimatedTokensSaved === "number" &&
+        typeof entry.promptSimplificationEnabled === "boolean" &&
+        typeof entry.promptCompressionEnabled === "boolean",
+    ),
+  };
+}
+
+function saveRoutingHistory(
+  cwd: string,
+  history: RoutingHistory,
+  config: TokenomyConfig,
+): void {
+  const path = routingHistoryPath(cwd);
+  mkdirSync(dirname(path), { recursive: true });
+  const entries = history.entries.slice(0, config.telemetry.maxEntries);
+  writeFileSync(path, `${JSON.stringify({ entries }, null, 2)}\n`, "utf8");
 }
 
 function hashText(text: string): string {
@@ -610,6 +696,15 @@ function validateConfig(config: TokenomyConfig): string[] {
     config.cache.maxClassifierEntries < 1
   ) {
     warnings.push("cache.maxClassifierEntries must be at least 1");
+  }
+  if (typeof config.telemetry.enabled !== "boolean") {
+    warnings.push("telemetry.enabled must be a boolean");
+  }
+  if (
+    typeof config.telemetry.maxEntries !== "number" ||
+    config.telemetry.maxEntries < 1
+  ) {
+    warnings.push("telemetry.maxEntries must be at least 1");
   }
   if (
     typeof config.distillation.minContextTokens !== "number" ||
@@ -1234,6 +1329,44 @@ function updateIntentStats(
   stats.intents[analysis.intent] = current;
 }
 
+function recordRoutingHistory(
+  cwd: string,
+  prompt: string,
+  contextTokens: number | undefined,
+  imageCount: number,
+  analysis: LocalAnalysis,
+  decision: RouterDecision,
+  promptSavings: number,
+  sessionEstimatedTokensSaved: number,
+  config: TokenomyConfig,
+): void {
+  if (!config.telemetry.enabled) return;
+  const history = loadRoutingHistory(cwd);
+  const entry: RoutingHistoryEntry = {
+    id: hashText(`${Date.now()}\n${normalizedPrompt(prompt)}\n${decision.tier}`),
+    at: new Date().toISOString(),
+    promptHash: hashText(normalizedPrompt(prompt)),
+    promptChars: prompt.length,
+    contextBucket: contextBucket(contextTokens),
+    imageCount,
+    intent: analysis.intent,
+    risk: analysis.risk,
+    toolProfile: analysis.toolProfile,
+    tier: decision.tier,
+    source: decision.source,
+    confidence: decision.confidence,
+    model: decision.model,
+    thinking: decision.thinking,
+    signals: analysis.signals.slice(0, 12),
+    estimatedClassifierTokens: analysis.estimatedClassifierTokens,
+    estimatedTokensSaved: promptSavings,
+    sessionEstimatedTokensSaved,
+    promptSimplificationEnabled: config.promptSimplification.enabled,
+    promptCompressionEnabled: config.promptSimplification.compressionEnabled,
+  };
+  saveRoutingHistory(cwd, { entries: [entry, ...history.entries] }, config);
+}
+
 function shouldUseProjectDigest(
   digest: ProjectDigest | undefined,
   analysis: LocalAnalysis,
@@ -1367,6 +1500,27 @@ function buildTokenDiscipline(
   }
 
   return common.join("\n");
+}
+
+function formatRoutingHistoryEntry(entry: RoutingHistoryEntry): string {
+  const confidence =
+    entry.confidence === undefined
+      ? "n/a"
+      : `${Math.round(entry.confidence * 100)}%`;
+  const compression = entry.promptCompressionEnabled ? "compression:on" : "compression:off";
+  return [
+    entry.at,
+    `${entry.tier}/${entry.source}`,
+    entry.model ?? "model:unknown",
+    `thinking:${entry.thinking}`,
+    `intent:${entry.intent}`,
+    `risk:${entry.risk}`,
+    `confidence:${confidence}`,
+    `ctx:${entry.contextBucket}`,
+    `saved:${entry.estimatedTokensSaved}`,
+    `prompt:${entry.promptHash}`,
+    compression,
+  ].join(" | ");
 }
 
 export default function tokenomy(pi: ExtensionAPI) {
@@ -1600,9 +1754,20 @@ export default function tokenomy(pi: ExtensionAPI) {
       updateIntentStats(stats, analysis, decision);
       try {
         saveStats(ctx.cwd, stats);
+        recordRoutingHistory(
+          ctx.cwd,
+          event.prompt,
+          contextTokens,
+          imageCount,
+          analysis,
+          decision,
+          promptSavings,
+          estimatedTokensSaved,
+          config,
+        );
         statsWarning = undefined;
       } catch (error) {
-        statsWarning = `failed to save Tokenomy stats: ${error instanceof Error ? error.message : String(error)}`;
+        statsWarning = `failed to save Tokenomy stats/history: ${error instanceof Error ? error.message : String(error)}`;
         if (ctx.hasUI) {
           ctx.ui.notify(`Tokenomy stats warning: ${statsWarning}`, "warning");
         }
@@ -1646,7 +1811,7 @@ export default function tokenomy(pi: ExtensionAPI) {
 
   pi.registerCommand("tokenomy", {
     description:
-      "Show or change Tokenomy token-router status: /tokenomy [on|off|reload|status|explain|reset-stats|dry-run on|dry-run off]",
+      "Show or change Tokenomy token-router status: /tokenomy [on|off|reload|status|explain|history|export-history|reset-history|reset-stats|dry-run on|dry-run off]",
     handler: async (args, ctx) => {
       const action = args.trim().toLowerCase() || "status";
       if (action === "on") {
@@ -1692,6 +1857,45 @@ export default function tokenomy(pi: ExtensionAPI) {
         }
         return;
       }
+      if (action === "history") {
+        try {
+          const history = loadRoutingHistory(ctx.cwd);
+          if (!history.entries.length) {
+            ctx.ui.notify("Tokenomy routing history is empty", "info");
+            return;
+          }
+          const lines = [
+            `Tokenomy routing history (${history.entries.length} entries, newest first):`,
+            ...history.entries.slice(0, 10).map(formatRoutingHistoryEntry),
+          ];
+          ctx.ui.notify(lines.join("\n"), "info");
+        } catch (error) {
+          ctx.ui.notify(
+            `Tokenomy history warning: failed to load routing history: ${error instanceof Error ? error.message : String(error)}`,
+            "warning",
+          );
+        }
+        return;
+      }
+      if (action === "export-history") {
+        ctx.ui.notify(
+          `Tokenomy routing history file: ${routingHistoryPath(ctx.cwd)}`,
+          "info",
+        );
+        return;
+      }
+      if (action === "reset-history") {
+        try {
+          saveRoutingHistory(ctx.cwd, { entries: [] }, config);
+          ctx.ui.notify("Tokenomy routing history reset", "info");
+        } catch (error) {
+          ctx.ui.notify(
+            `Tokenomy history warning: failed to reset routing history: ${error instanceof Error ? error.message : String(error)}`,
+            "warning",
+          );
+        }
+        return;
+      }
       if (action === "explain") {
         if (!lastDecision) {
           ctx.ui.notify("Tokenomy has not made a routing decision yet", "info");
@@ -1734,6 +1938,7 @@ export default function tokenomy(pi: ExtensionAPI) {
         `Version: ${packageVersion()}`,
         `Provider: ${config.provider}`,
         `Classifier: ${config.classifier.enabled ? "enabled" : "disabled"} (${config.classifier.onlyWhenAmbiguous ? "ambiguous only" : "all eligible"})`,
+        `Telemetry: ${config.telemetry.enabled ? "enabled" : "disabled"} (${config.telemetry.maxEntries} max entries)`,
         `Prompt simplification: ${config.promptSimplification.enabled ? "enabled" : "disabled"}`,
         `Prompt compression: ${config.promptSimplification.compressionEnabled ? "enabled" : "disabled"}`,
         `Tool management: ${config.tools.manage ? "enabled" : "disabled"}`,
@@ -1748,6 +1953,7 @@ export default function tokenomy(pi: ExtensionAPI) {
         `Baseline model: ${baselineModel ?? "unknown"}`,
         `Cache directory: ${cacheDir(ctx.cwd)}`,
         `Stats file: ${statsPath(ctx.cwd)}`,
+        `Routing history file: ${routingHistoryPath(ctx.cwd)}`,
         ...(statsWarning ? [`Stats warning: ${statsWarning}`] : []),
         `Config files: ${join(getAgentDir(), "tokenomy.json")} and ${join(ctx.cwd, CONFIG_DIR_NAME, "tokenomy.json")}`,
       ];

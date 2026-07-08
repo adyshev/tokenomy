@@ -21,6 +21,11 @@ The classifier cache stores routing decisions keyed by a normalized prompt hash,
 context bucket, intent, and risk. The project digest stores compact routing
 metadata such as intent counts and the last selected tier/model.
 
+Routing telemetry, when enabled, stores recent decision metadata in
+`.pi/tokenomy-cache/routing-history.json`. It includes prompt hashes, prompt
+size, context bucket, selected tier/source/model, confidence, signals, and
+estimated token savings. It does not store raw prompt text or model responses.
+
 Tokenomy does not store raw prompt text, model responses, API keys, or auth
 headers.
 

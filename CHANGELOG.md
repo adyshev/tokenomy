@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Added prompt-safe local routing telemetry with `/tokenomy history`, `/tokenomy export-history`, and `/tokenomy reset-history`.
 - Added local TokenShrink-based classifier prompt compression.
 - Added `promptSimplification.compressionEnabled` to disable TokenShrink compression while keeping it enabled by default.
 - Added local prompt simplification for large classifier prompts and long-output condensation guidance.

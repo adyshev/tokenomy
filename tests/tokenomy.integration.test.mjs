@@ -243,6 +243,48 @@ test("uses the cheapest fallback model when confidence is below threshold", asyn
   assert.equal(stats.sessionsStarted, 1);
 });
 
+test("records prompt-safe routing history", async () => {
+  const prompt = "Help with the project and do not store this exact prompt.";
+  const harness = createHarness(createProjectConfig());
+  await startSession(harness);
+
+  await routePrompt(harness, prompt);
+
+  const historyPath = join(
+    harness.ctx.cwd,
+    ".pi/tokenomy-cache/routing-history.json",
+  );
+  const historyText = readFileSync(historyPath, "utf8");
+  const history = JSON.parse(historyText);
+  assert.equal(history.entries.length, 1);
+  assert.equal(history.entries[0].tier, "simple");
+  assert.equal(history.entries[0].source, "fallback");
+  assert.match(history.entries[0].intent, /^(answer|read)$/);
+  assert.equal(history.entries[0].promptChars, prompt.length);
+  assert.equal(typeof history.entries[0].promptHash, "string");
+  assert.equal(history.entries[0].promptHash.length, 24);
+  assert.equal(history.entries[0].promptCompressionEnabled, true);
+  assert.doesNotMatch(historyText, /do not store this exact prompt/);
+
+  await runTokenomyCommand(harness, "history");
+  assert.match(harness.notifications.at(-1).message, /Tokenomy routing history/);
+  assert.match(harness.notifications.at(-1).message, /simple\/fallback/);
+
+  await runTokenomyCommand(harness, "export-history");
+  assert.match(
+    harness.notifications.at(-1).message,
+    /routing-history\.json/,
+  );
+
+  await runTokenomyCommand(harness, "reset-history");
+  assert.equal(
+    harness.notifications.at(-1).message,
+    "Tokenomy routing history reset",
+  );
+  const resetHistory = JSON.parse(readFileSync(historyPath, "utf8"));
+  assert.equal(resetHistory.entries.length, 0);
+});
+
 test("keeps simple shell listing prompts on the cheap model in large contexts", async () => {
   const harness = createHarness(createProjectConfig(), {
     contextTokens: 90_000,

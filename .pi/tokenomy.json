@@ -19,6 +19,10 @@
     "maxEstimatedClassifierTokens": 1400,
     "minConfidence": 0.95
   },
+  "telemetry": {
+    "enabled": true,
+    "maxEntries": 200
+  },
   "tools": {
     "manage": false,
     "preserveCustomTools": true,
