@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+
+## 0.1.16-beta - 2026-07-08
 - Added a compact Tokenomy status/footer formatter that shows tier, source,
   confidence, session savings, and lifetime savings without replacing other
   plugin status entries.

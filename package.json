@@ -1,6 +1,6 @@
 {
   "name": "tokenomy-pi",
-  "version": "0.1.15-beta",
+  "version": "0.1.16-beta",
   "description": "Automatic token-saving router for Pi/Codex that uses cheaper models when safe and preserves quality with confidence checks, local memory, and prompt compression.",
   "license": "MIT",
   "type": "module",
