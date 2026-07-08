@@ -185,7 +185,7 @@ test("starts on the configured complex baseline model", async () => {
   await startSession(harness);
 
   assert.equal(harness.selectedModels.at(-1), "openai-codex/gpt-5.5");
-  assert.equal(harness.statuses.get("tokenomy"), "on saved:0 lifetime:0");
+  assert.equal(harness.statuses.get("tokenomy"), "Tokenomy on saved:0 lifetime:0");
 });
 
 test("switches down for simple prompts and back up for complex prompts", async () => {
@@ -566,7 +566,7 @@ test("routes state-changing local workflows to medium locally", async () => {
   assert.equal(harness.thinkingLevels.at(-1), "low");
   assert.match(
     harness.statuses.get("tokenomy"),
-    /^medium:local\/\d+% saved:\d+ lifetime:\d+$/,
+    /^Tokenomy medium:local\/\d+% saved:\d+ lifetime:\d+$/,
   );
   assert.match(
     harness.notifications.at(-1).message,
@@ -590,7 +590,7 @@ test("keeps Tokenomy footer separate from other plugin status entries", async ()
   );
   assert.match(
     harness.statuses.get("tokenomy"),
-    /^medium:local\/\d+% saved:\d+ lifetime:\d+$/,
+    /^Tokenomy medium:local\/\d+% saved:\d+ lifetime:\d+$/,
   );
 });
 
@@ -1191,9 +1191,11 @@ test("explains the last decision and resets stats", async () => {
 test("shows the package version in status output", async () => {
   const harness = createHarness(createProjectConfig());
   await startSession(harness);
+  harness.statuses.delete("tokenomy");
 
   await runTokenomyCommand(harness, "status");
 
+  assert.equal(harness.statuses.get("tokenomy"), "Tokenomy on saved:0 lifetime:0");
   assert.match(harness.notifications.at(-1).message, /Tokenomy: enabled/);
   assert.match(
     harness.notifications.at(-1).message,

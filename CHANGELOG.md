@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+- Made the Tokenomy status/footer text visibly labeled and refreshed by
+  `/tokenomy status`.
 
 ## 0.1.16-beta - 2026-07-08
 - Added a compact Tokenomy status/footer formatter that shows tier, source,
