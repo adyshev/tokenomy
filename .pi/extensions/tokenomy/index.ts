@@ -1418,6 +1418,18 @@ function analyzePrompt(
   ) {
     add(3, "high-risk-domain");
   }
+  const auditReview = hasAny(lower, [
+    /\b(final\s+scan|scan|audit|review|inspect)\b/,
+  ]);
+  const qualityReview = hasAny(lower, [
+    /\b(optimal|optimi[sz]ed?|dead[- ]code[- ]free|dead code|up[- ]to[- ]date|outdated|unused|stale|cleanup|clean up)\b/,
+  ]);
+  const configTarget = hasAny(lower, [
+    /\b(nvim|neovim|vim|tmux|dotfiles?|shell config|zsh|bashrc|config(?:uration)?s?)\b/,
+  ]);
+  if (auditReview && (qualityReview || configTarget)) {
+    add(4, "config-audit");
+  }
   if (
     hasAny(lower, [
       /\b(implement|add|change|modify|edit|rewrite|tests?|unit test|integration test|feature|endpoint|api)\b/,
@@ -1425,7 +1437,7 @@ function analyzePrompt(
   ) {
     add(2, "code-change");
   }
-  if (hasAny(lower, [/\b(plan|design|investigate|analy[sz]e|review)\b/])) {
+  if (hasAny(lower, [/\b(plan|design|investigate|analy[sz]e|review|audit|scan)\b/])) {
     add(1, "analysis-needed");
   }
   if (
@@ -1440,7 +1452,7 @@ function analyzePrompt(
   let toolProfile: ToolProfile = "none";
   if (
     hasAny(lower, [
-      /\b(repo|repository|project|codebase|files?|classes?|functions?|where is|inspect|read|grep|search|find|summari[sz]e this (repo|repository|project|codebase))\b/,
+      /\b(repo|repository|project|codebase|files?|classes?|functions?|where is|inspect|scan|audit|read|grep|search|find|summari[sz]e this (repo|repository|project|codebase))\b/,
     ])
   ) {
     toolProfile = "read";

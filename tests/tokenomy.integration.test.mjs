@@ -522,6 +522,40 @@ test("keeps simple shell listing prompts on the cheap model in large contexts", 
   );
 });
 
+test("routes short config audit prompts to medium instead of mini", async () => {
+  const harness = createHarness(createProjectConfig());
+  await startSession(harness);
+
+  await routePrompt(
+    harness,
+    "Please do a final scan nvim and tmux config to ensure it is optimal, dead-code-free and up-to-date",
+  );
+
+  assert.equal(harness.selectedModels.at(-1), "openai-codex/gpt-5.4");
+  assert.equal(harness.thinkingLevels.at(-1), "low");
+  assert.match(
+    harness.notifications.at(-1).message,
+    /Tokenomy: medium via local -> openai-codex\/gpt-5\.4, thinking:low/,
+  );
+});
+
+test("routes short quality audit prompts to medium", async () => {
+  const harness = createHarness(createProjectConfig());
+  await startSession(harness);
+
+  await routePrompt(
+    harness,
+    "Audit dotfiles for unused config and stale settings.",
+  );
+
+  assert.equal(harness.selectedModels.at(-1), "openai-codex/gpt-5.4");
+  assert.equal(harness.thinkingLevels.at(-1), "low");
+  assert.match(
+    harness.notifications.at(-1).message,
+    /Tokenomy: medium via local -> openai-codex\/gpt-5\.4, thinking:low/,
+  );
+});
+
 test("routes medium coding work to the configured medium model", async () => {
   const harness = createHarness(createProjectConfig());
   await startSession(harness);

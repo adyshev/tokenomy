@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+- Fixed short config-audit prompts such as nvim/tmux final scans routing to
+  the cheapest mini model.
 
 ## 0.1.14-beta - 2026-07-08
 - Audited docs for npm install, compatibility, memory, compression, telemetry,
