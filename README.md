@@ -76,6 +76,9 @@ Useful commands inside Pi:
 /tokenomy on
 /tokenomy reload
 /tokenomy explain
+/tokenomy history
+/tokenomy export-history
+/tokenomy reset-history
 /tokenomy reset-stats
 /tokenomy dry-run on
 /tokenomy dry-run off
@@ -83,7 +86,10 @@ Useful commands inside Pi:
 
 `/tokenomy status` shows the current routing state, last decision, and estimated tokens saved vs not using Tokenomy.
 `/tokenomy explain` shows the signals and reason for the last routing decision.
+`/tokenomy history` shows recent prompt-safe routing telemetry.
+`/tokenomy export-history` shows the local routing history file path.
 `/tokenomy reset-stats` clears local lifetime counters.
+`/tokenomy reset-history` clears local routing history.
 
 Routing decision notifications are enabled by default so you can see when
 Tokenomy switches models. To disable them, set `ui.notifyDecisions` to `false`
@@ -178,6 +184,10 @@ Tokenomy also adjusts thinking level by tier:
 The status bar and decision notifications show the selected tier, source,
 model, thinking level, and estimated token savings. `/tokenomy status` also
 shows lifetime estimated savings stored locally in `.pi/tokenomy-stats.json`.
+Recent routing decisions are stored locally in
+`.pi/tokenomy-cache/routing-history.json` when telemetry is enabled. Telemetry
+stores prompt hashes, routing metadata, compression guard status, and estimated
+savings, not raw prompt text.
 
 ## Configuration
 

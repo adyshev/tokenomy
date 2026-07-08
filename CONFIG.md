@@ -82,6 +82,26 @@ Classifier cache entries are stored in `.pi/tokenomy-cache/classifier-cache.json
 Project digest metadata is stored in `.pi/tokenomy-cache/project-digest.json`.
 Neither cache stores model responses, API keys, or auth headers.
 
+## Telemetry
+
+```json
+{
+  "telemetry": {
+    "enabled": true,
+    "maxEntries": 200
+  }
+}
+```
+
+Telemetry stores recent routing decisions in
+`.pi/tokenomy-cache/routing-history.json`. Entries are newest-first and capped
+by `maxEntries`. They include prompt hashes, prompt size, context bucket,
+intent, risk, selected tier/source/model, confidence, signals, and estimated
+tokens saved. Live classifier calls also record whether classifier prompt
+compression was accepted or rejected by the semantic guard, how many protected
+signal lines triggered the guard, and the attempted compression savings. They
+do not store raw prompt text or model responses.
+
 ## Distillation
 
 ```json
