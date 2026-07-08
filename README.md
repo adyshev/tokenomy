@@ -175,7 +175,8 @@ length, context size, images, and task language such as `explain`, `review`,
 The local heuristic assigns:
 
 - a tier: `simple`, `medium`, or `complex`
-- an intent such as `answer`, `shell_simple`, `read`, `single_edit`, `multi_edit`, `debug`, `architecture`, or `release`
+- an intent such as `answer`, `shell_simple`, `read`, `single_edit`,
+  `multi_edit`, `debug`, `architecture`, `local_workflow`, or `release`
 - a risk level: `low`, `medium`, or `high`
 - a tool profile: `none`, `read`, or `write`
 - a confidence score
@@ -235,9 +236,11 @@ Tokenomy also adjusts thinking level by tier:
 - `medium`: low thinking
 - `complex`: medium thinking
 
-The status bar and decision notifications show the selected tier, source,
-model, thinking level, and estimated token savings. `/tokenomy status` also
-shows lifetime estimated savings stored locally in `.pi/tokenomy-stats.json`.
+The status/footer entry and decision notifications show the selected tier,
+source, model, thinking level, and estimated token savings. Tokenomy writes its
+own `tokenomy` status entry, so it can appear alongside footer entries from
+other plugins instead of replacing them. `/tokenomy status` also shows lifetime
+estimated savings stored locally in `.pi/tokenomy-stats.json`.
 Recent routing decisions are stored locally in
 `.pi/tokenomy-cache/routing-history.json` when telemetry is enabled. Telemetry
 stores prompt hashes, routing metadata, compression guard status, and estimated

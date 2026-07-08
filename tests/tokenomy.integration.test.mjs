@@ -185,7 +185,7 @@ test("starts on the configured complex baseline model", async () => {
   await startSession(harness);
 
   assert.equal(harness.selectedModels.at(-1), "openai-codex/gpt-5.5");
-  assert.equal(harness.statuses.get("tokenomy"), "tokenomy:on");
+  assert.equal(harness.statuses.get("tokenomy"), "on saved:0 lifetime:0");
 });
 
 test("switches down for simple prompts and back up for complex prompts", async () => {
@@ -553,6 +553,58 @@ test("routes short quality audit prompts to medium", async () => {
   assert.match(
     harness.notifications.at(-1).message,
     /Tokenomy: medium via local -> openai-codex\/gpt-5\.4, thinking:low/,
+  );
+});
+
+test("routes state-changing local workflows to medium locally", async () => {
+  const harness = createHarness(createProjectConfig());
+  await startSession(harness);
+
+  await routePrompt(harness, "commit & push");
+
+  assert.equal(harness.selectedModels.at(-1), "openai-codex/gpt-5.4");
+  assert.equal(harness.thinkingLevels.at(-1), "low");
+  assert.match(
+    harness.statuses.get("tokenomy"),
+    /^medium:local\/\d+% saved:\d+ lifetime:\d+$/,
+  );
+  assert.match(
+    harness.notifications.at(-1).message,
+    /Tokenomy: medium via local -> openai-codex\/gpt-5\.4, thinking:low/,
+  );
+});
+
+test("keeps Tokenomy footer separate from other plugin status entries", async () => {
+  const harness = createHarness(createProjectConfig());
+  harness.statuses.set(
+    "headroom",
+    "Headroom medium:fallback/94% saved:1300 lifetime:22350",
+  );
+  await startSession(harness);
+
+  await routePrompt(harness, "commit & push");
+
+  assert.equal(
+    harness.statuses.get("headroom"),
+    "Headroom medium:fallback/94% saved:1300 lifetime:22350",
+  );
+  assert.match(
+    harness.statuses.get("tokenomy"),
+    /^medium:local\/\d+% saved:\d+ lifetime:\d+$/,
+  );
+});
+
+test("keeps read-only git inspection prompts cheap", async () => {
+  const harness = createHarness(createProjectConfig());
+  await startSession(harness);
+
+  await routePrompt(harness, "git status");
+
+  assert.equal(harness.selectedModels.at(-1), "openai-codex/gpt-5.4-mini");
+  assert.equal(harness.thinkingLevels.at(-1), "minimal");
+  assert.match(
+    harness.notifications.at(-1).message,
+    /Tokenomy: simple via fallback -> openai-codex\/gpt-5\.4-mini, thinking:minimal/,
   );
 });
 

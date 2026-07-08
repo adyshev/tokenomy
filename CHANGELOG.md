@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.1.16-beta - 2026-07-08
+- Added a compact Tokenomy status/footer formatter that shows tier, source,
+  confidence, session savings, and lifetime savings without replacing other
+  plugin status entries.
+- Added local workflow routing for state-changing git/tool chains such as
+  `commit & push`, while keeping read-only git inspection prompts cheap.
+
 ## 0.1.15-beta - 2026-07-08
 - Fixed short config-audit prompts such as nvim/tmux final scans routing to
   the cheapest mini model.

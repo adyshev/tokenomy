@@ -209,6 +209,11 @@ need no tools, read-only tools, or write-capable tools.
 `notifyDecisions` shows a notification after each routing decision. Set it to
 `false` if the notifications are too noisy.
 
+`status` controls Tokenomy's compact Pi status/footer entry. Tokenomy writes
+only its own `tokenomy` entry, for example
+`medium:local/96% saved:1300 lifetime:22350`, and does not overwrite status
+entries owned by other plugins.
+
 ## Debug
 
 ```json
