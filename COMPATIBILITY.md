@@ -5,6 +5,8 @@ Tokenomy currently targets a narrow environment by design.
 ## Supported
 
 - Pi with project-local extension support
+- `pi install npm:tokenomy-pi`
+- `pi install https://github.com/adyshev/tokenomy`
 - Node.js 22.19 or newer
 - ChatGPT Plus/Pro Codex authenticated in Pi
 - Pi `openai-codex` provider
@@ -36,6 +38,5 @@ change active tools.
 ## Not Yet Supported
 
 - Non-Codex provider presets
-- npm package installation
 - automatic install/update across multiple projects
 - exact provider billing/token accounting

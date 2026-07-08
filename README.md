@@ -80,13 +80,13 @@ for Codex models available to Plus/Pro users through Pi.
 See `INSTALL.md` for full setup steps. The short version is:
 
 ```bash
-pi install https://github.com/adyshev/tokenomy
+pi install npm:tokenomy-pi
 ```
 
 For project-local install:
 
 ```bash
-pi install -l https://github.com/adyshev/tokenomy
+pi install -l npm:tokenomy-pi
 ```
 
 Then authenticate Codex in Pi and start Pi from the target project.
@@ -267,7 +267,7 @@ If you want the fallback selection to be smarter than string sorting, Tokenomy u
 If your available model list differs, run:
 
 ```bash
-pi --list-models | grep openai-codex
+pi --list-models openai-codex
 ```
 
 Then update `.pi/tokenomy.json`.
@@ -291,5 +291,6 @@ npm test
 The tests use Node's built-in test runner and a mocked Pi runtime. They verify
 that Tokenomy starts on the configured complex baseline model, downshifts for a
 simple prompt, upshifts again for a complex prompt, uses risk-aware fallback,
-reuses classifier cache entries, and injects compact project digests for large
-contexts.
+reuses classifier cache entries, injects compact project digests for large
+contexts, learns local project memory, records telemetry, and rejects unsafe
+classifier prompt compression.

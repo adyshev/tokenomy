@@ -14,7 +14,7 @@ spend without changing the final user prompt.
 
 ## Install with Pi
 
-Install from npm once the package is published:
+Recommended npm install:
 
 ```bash
 pi install npm:tokenomy-pi
@@ -26,7 +26,7 @@ Project-local npm install:
 pi install -l npm:tokenomy-pi
 ```
 
-Recommended public install:
+GitHub install also works:
 
 ```bash
 pi install https://github.com/adyshev/tokenomy
