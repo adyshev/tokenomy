@@ -14,6 +14,7 @@ projects where it runs. The stats file stores local estimated usage counters:
 - classifier cache hit count
 - project digest use count
 - adaptive fallback count
+- compression guard rejection count
 - per-intent route counters
 - last update timestamp
 
@@ -24,7 +25,9 @@ metadata such as intent counts and the last selected tier/model.
 Routing telemetry, when enabled, stores recent decision metadata in
 `.pi/tokenomy-cache/routing-history.json`. It includes prompt hashes, prompt
 size, context bucket, selected tier/source/model, confidence, signals, and
-estimated token savings. It does not store raw prompt text or model responses.
+estimated token savings. For live classifier calls, it also includes
+compression guard status and counts, but not the protected signal line text. It
+does not store raw prompt text or model responses.
 
 Tokenomy does not store raw prompt text, model responses, API keys, or auth
 headers.

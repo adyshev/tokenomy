@@ -666,6 +666,36 @@ test("rejects compression when protected signal lines would be rewritten", async
   assert.doesNotMatch(classifierPrompt, /\[DECODE\]/);
   assert.match(classifierPrompt, new RegExp(protectedConstraint));
 
+  const stats = JSON.parse(
+    readFileSync(join(harness.ctx.cwd, ".pi/tokenomy-stats.json"), "utf8"),
+  );
+  assert.equal(stats.compressionGuardRejections, 1);
+
+  const history = JSON.parse(
+    readFileSync(
+      join(harness.ctx.cwd, ".pi/tokenomy-cache/routing-history.json"),
+      "utf8",
+    ),
+  );
+  assert.equal(history.entries[0].classifierPromptCompressed, false);
+  assert.equal(history.entries[0].classifierPromptCompressionGuarded, true);
+  assert.equal(
+    history.entries[0].classifierPromptCompressionGuardMissingLines,
+    1,
+  );
+  assert.ok(
+    history.entries[0].classifierPromptCompressionTokensSaved > 0,
+  );
+
+  await runTokenomyCommand(harness, "history");
+  assert.match(harness.notifications.at(-1).message, /guard:rejected\/1/);
+
+  await runTokenomyCommand(harness, "status");
+  assert.match(
+    harness.notifications.at(-1).message,
+    /Compression guard rejections lifetime: 1/,
+  );
+
   delete process.env.TOKENOMY_TEST_CLASSIFIER_RESPONSE;
 });
 

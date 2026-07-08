@@ -134,6 +134,7 @@ interface TokenomyStats {
   classifierCacheHits: number;
   projectDigestUses: number;
   adaptiveFallbacks: number;
+  compressionGuardRejections: number;
   intents: Record<
     string,
     {
@@ -198,10 +199,23 @@ interface RoutingHistoryEntry {
   sessionEstimatedTokensSaved: number;
   promptSimplificationEnabled: boolean;
   promptCompressionEnabled: boolean;
+  classifierPromptCompressed?: boolean;
+  classifierPromptCompressionGuarded?: boolean;
+  classifierPromptCompressionGuardMissingLines?: number;
+  classifierPromptCompressionTokensSaved?: number;
 }
 
 interface RoutingHistory {
   entries: RoutingHistoryEntry[];
+}
+
+interface ClassifierPromptTelemetry {
+  attempted: boolean;
+  accepted: boolean;
+  guarded: boolean;
+  guardMissingLines: number;
+  tokensSaved: number;
+  requiredLines: number;
 }
 
 const BUILTIN_TOOL_NAMES = new Set([
@@ -299,6 +313,7 @@ const EMPTY_STATS: TokenomyStats = {
   classifierCacheHits: 0,
   projectDigestUses: 0,
   adaptiveFallbacks: 0,
+  compressionGuardRejections: 0,
   intents: {},
   updatedAt: "",
 };
@@ -394,6 +409,7 @@ function loadStats(cwd: string): TokenomyStats {
     classifierCacheHits: safeInt(parsed.classifierCacheHits),
     projectDigestUses: safeInt(parsed.projectDigestUses),
     adaptiveFallbacks: safeInt(parsed.adaptiveFallbacks),
+    compressionGuardRejections: safeInt(parsed.compressionGuardRejections),
     intents,
     updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : "",
   };
@@ -415,33 +431,35 @@ function loadRoutingHistory(cwd: string): RoutingHistory {
     return { entries: [] };
   }
   return {
-    entries: parsed.entries.filter(
-      (entry): entry is RoutingHistoryEntry =>
-        isObject(entry) &&
-        typeof entry.id === "string" &&
-        typeof entry.at === "string" &&
-        typeof entry.promptHash === "string" &&
-        typeof entry.promptChars === "number" &&
-        typeof entry.contextBucket === "string" &&
-        typeof entry.imageCount === "number" &&
-        typeof entry.intent === "string" &&
-        typeof entry.risk === "string" &&
-        typeof entry.toolProfile === "string" &&
-        (entry.tier === "simple" ||
-          entry.tier === "medium" ||
-          entry.tier === "complex") &&
-        (entry.source === "local" ||
-          entry.source === "classifier" ||
-          entry.source === "classifier-cache" ||
-          entry.source === "fallback") &&
-        typeof entry.thinking === "string" &&
-        Array.isArray(entry.signals) &&
-        typeof entry.estimatedClassifierTokens === "number" &&
-        typeof entry.estimatedTokensSaved === "number" &&
-        typeof entry.sessionEstimatedTokensSaved === "number" &&
-        typeof entry.promptSimplificationEnabled === "boolean" &&
-        typeof entry.promptCompressionEnabled === "boolean",
-    ),
+    entries: parsed.entries
+      .filter(
+        (entry) =>
+          isObject(entry) &&
+          typeof entry.id === "string" &&
+          typeof entry.at === "string" &&
+          typeof entry.promptHash === "string" &&
+          typeof entry.promptChars === "number" &&
+          typeof entry.contextBucket === "string" &&
+          typeof entry.imageCount === "number" &&
+          typeof entry.intent === "string" &&
+          typeof entry.risk === "string" &&
+          typeof entry.toolProfile === "string" &&
+          (entry.tier === "simple" ||
+            entry.tier === "medium" ||
+            entry.tier === "complex") &&
+          (entry.source === "local" ||
+            entry.source === "classifier" ||
+            entry.source === "classifier-cache" ||
+            entry.source === "fallback") &&
+          typeof entry.thinking === "string" &&
+          Array.isArray(entry.signals) &&
+          typeof entry.estimatedClassifierTokens === "number" &&
+          typeof entry.estimatedTokensSaved === "number" &&
+          typeof entry.sessionEstimatedTokensSaved === "number" &&
+          typeof entry.promptSimplificationEnabled === "boolean" &&
+          typeof entry.promptCompressionEnabled === "boolean",
+      )
+      .map((entry) => entry as RoutingHistoryEntry),
   };
 }
 
@@ -841,9 +859,21 @@ function compressPromptText(
   text: string,
   config: TokenomyConfig,
   requiredLines: string[] = [],
-): { text: string; compressed: boolean; tokensSaved: number } {
+): {
+  text: string;
+  compressed: boolean;
+  telemetry: ClassifierPromptTelemetry;
+} {
+  const disabledTelemetry: ClassifierPromptTelemetry = {
+    attempted: false,
+    accepted: false,
+    guarded: false,
+    guardMissingLines: 0,
+    tokensSaved: 0,
+    requiredLines: requiredLines.length,
+  };
   if (!config.promptSimplification.compressionEnabled) {
-    return { text, compressed: false, tokensSaved: 0 };
+    return { text, compressed: false, telemetry: disabledTelemetry };
   }
 
   try {
@@ -852,20 +882,45 @@ function compressPromptText(
       typeof result.stats?.tokensSaved === "number"
         ? result.stats.tokensSaved
         : 0;
+    const baseTelemetry: ClassifierPromptTelemetry = {
+      attempted: true,
+      accepted: false,
+      guarded: false,
+      guardMissingLines: 0,
+      tokensSaved,
+      requiredLines: requiredLines.length,
+    };
     if (
       tokensSaved < config.promptSimplification.minCompressionSavingsTokens ||
       !result.compressed ||
       result.compressed === text
     ) {
-      return { text, compressed: false, tokensSaved: 0 };
+      return { text, compressed: false, telemetry: baseTelemetry };
     }
-    if (missingRequiredLines(result.compressed, requiredLines).length) {
-      return { text, compressed: false, tokensSaved: 0 };
+    const missing = missingRequiredLines(result.compressed, requiredLines);
+    if (missing.length) {
+      return {
+        text,
+        compressed: false,
+        telemetry: {
+          ...baseTelemetry,
+          guarded: true,
+          guardMissingLines: missing.length,
+        },
+      };
     }
-    return { text: result.compressed, compressed: true, tokensSaved };
+    return {
+      text: result.compressed,
+      compressed: true,
+      telemetry: { ...baseTelemetry, accepted: true },
+    };
   } catch {
     // Compression is an optimization. Routing must continue with the raw text.
-    return { text, compressed: false, tokensSaved: 0 };
+    return {
+      text,
+      compressed: false,
+      telemetry: { ...disabledTelemetry, attempted: true },
+    };
   }
 }
 
@@ -877,6 +932,7 @@ function simplifyPromptForClassifier(
   simplified: boolean;
   compressed: boolean;
   tokensSaved: number;
+  telemetry: ClassifierPromptTelemetry;
 } {
   if (!config.promptSimplification.enabled) {
     const text = prompt.slice(0, config.classifier.maxPromptChars);
@@ -885,7 +941,12 @@ function simplifyPromptForClassifier(
     );
     const compressed = compressPromptText(text, config, requiredLines);
     return {
-      ...compressed,
+      text: compressed.text,
+      compressed: compressed.compressed,
+      tokensSaved: compressed.telemetry.accepted
+        ? compressed.telemetry.tokensSaved
+        : 0,
+      telemetry: compressed.telemetry,
       simplified: false,
     };
   }
@@ -894,7 +955,15 @@ function simplifyPromptForClassifier(
       prompt.split(/\r?\n/).map((line) => line.trimEnd()).filter(isSignalLine),
     );
     const compressed = compressPromptText(prompt, config, requiredLines);
-    return { ...compressed, simplified: false };
+    return {
+      text: compressed.text,
+      compressed: compressed.compressed,
+      tokensSaved: compressed.telemetry.accepted
+        ? compressed.telemetry.tokensSaved
+        : 0,
+      telemetry: compressed.telemetry,
+      simplified: false,
+    };
   }
 
   const lines = prompt
@@ -932,7 +1001,10 @@ function simplifyPromptForClassifier(
     ),
     simplified: true,
     compressed: compressed.compressed,
-    tokensSaved: compressed.tokensSaved,
+    tokensSaved: compressed.telemetry.accepted
+      ? compressed.telemetry.tokensSaved
+      : 0,
+    telemetry: compressed.telemetry,
   };
 }
 
@@ -1192,9 +1264,14 @@ function buildClassifierPrompt(
   contextTokens: number | undefined,
   analysis: LocalAnalysis,
   config: TokenomyConfig,
-): string {
+): {
+  text: string;
+  simplified: boolean;
+  compressed: boolean;
+  telemetry: ClassifierPromptTelemetry;
+} {
   const classifierPrompt = simplifyPromptForClassifier(prompt, config);
-  return [
+  const text = [
     "You are a token-economy router for a coding agent.",
     "Goal: minimize TOTAL token usage while preserving high-quality output.",
     "Prefer the cheapest tier that can solve correctly. Use complex only when a cheaper tier is likely to cause retries, excessive tool loops, or bad edits.",
@@ -1213,6 +1290,12 @@ function buildClassifierPrompt(
     "User prompt:",
     classifierPrompt.text,
   ].join("\n");
+  return {
+    text,
+    simplified: classifierPrompt.simplified,
+    compressed: classifierPrompt.compressed,
+    telemetry: classifierPrompt.telemetry,
+  };
 }
 
 function parseClassifierResponse(
@@ -1261,7 +1344,13 @@ async function classifyWithCheapModel(
   analysis: LocalAnalysis,
   config: TokenomyConfig,
   ctx: ExtensionContext,
-): Promise<ClassifierResult | undefined> {
+): Promise<
+  | {
+      result: ClassifierResult | undefined;
+      promptTelemetry: ClassifierPromptTelemetry;
+    }
+  | undefined
+> {
   const classifier = findFirstModel(
     ctx,
     config.models.classifier,
@@ -1271,6 +1360,12 @@ async function classifyWithCheapModel(
 
   const auth = await ctx.modelRegistry.getApiKeyAndHeaders(classifier);
   if (!auth.ok || !auth.apiKey) return undefined;
+  const classifierPrompt = buildClassifierPrompt(
+    prompt,
+    contextTokens,
+    analysis,
+    config,
+  );
 
   const response = await complete(
     classifier,
@@ -1281,12 +1376,7 @@ async function classifyWithCheapModel(
           content: [
             {
               type: "text" as const,
-              text: buildClassifierPrompt(
-                prompt,
-                contextTokens,
-                analysis,
-                config,
-              ),
+              text: classifierPrompt.text,
             },
           ],
           timestamp: Date.now(),
@@ -1310,7 +1400,10 @@ async function classifyWithCheapModel(
     )
     .map((part) => part.text)
     .join("\n");
-  return parseClassifierResponse(text);
+  return {
+    result: parseClassifierResponse(text),
+    promptTelemetry: classifierPrompt.telemetry,
+  };
 }
 
 function riskAtLeast(risk: RiskLevel, minimum: RiskLevel): boolean {
@@ -1378,6 +1471,7 @@ function recordRoutingHistory(
   decision: RouterDecision,
   promptSavings: number,
   sessionEstimatedTokensSaved: number,
+  classifierPromptTelemetry: ClassifierPromptTelemetry | undefined,
   config: TokenomyConfig,
 ): void {
   if (!config.telemetry.enabled) return;
@@ -1403,6 +1497,12 @@ function recordRoutingHistory(
     sessionEstimatedTokensSaved,
     promptSimplificationEnabled: config.promptSimplification.enabled,
     promptCompressionEnabled: config.promptSimplification.compressionEnabled,
+    classifierPromptCompressed: classifierPromptTelemetry?.accepted,
+    classifierPromptCompressionGuarded: classifierPromptTelemetry?.guarded,
+    classifierPromptCompressionGuardMissingLines:
+      classifierPromptTelemetry?.guardMissingLines,
+    classifierPromptCompressionTokensSaved:
+      classifierPromptTelemetry?.tokensSaved,
   };
   saveRoutingHistory(cwd, { entries: [entry, ...history.entries] }, config);
 }
@@ -1548,6 +1648,14 @@ function formatRoutingHistoryEntry(entry: RoutingHistoryEntry): string {
       ? "n/a"
       : `${Math.round(entry.confidence * 100)}%`;
   const compression = entry.promptCompressionEnabled ? "compression:on" : "compression:off";
+  const guard =
+    entry.classifierPromptCompressionGuarded === true
+      ? `guard:rejected/${entry.classifierPromptCompressionGuardMissingLines ?? 0}`
+      : entry.classifierPromptCompressed === true
+        ? `compressed:${entry.classifierPromptCompressionTokensSaved ?? 0}`
+        : entry.classifierPromptCompressed === false
+          ? "compressed:no"
+          : "classifier-prompt:n/a";
   return [
     entry.at,
     `${entry.tier}/${entry.source}`,
@@ -1560,6 +1668,7 @@ function formatRoutingHistoryEntry(entry: RoutingHistoryEntry): string {
     `saved:${entry.estimatedTokensSaved}`,
     `prompt:${entry.promptHash}`,
     compression,
+    guard,
   ].join(" | ");
 }
 
@@ -1647,6 +1756,7 @@ export default function tokenomy(pi: ExtensionAPI) {
     let source: RouterDecision["source"] = "local";
     let reason = analysis.signals.join(",") || "local heuristic";
     let confidence: number | undefined;
+    let classifierPromptTelemetry: ClassifierPromptTelemetry | undefined;
     const heuristicUncertain =
       analysis.confidence < config.classifier.minConfidence;
     const classifierKey = classifierCacheKey(
@@ -1659,15 +1769,17 @@ export default function tokenomy(pi: ExtensionAPI) {
     if (shouldUseClassifier(analysis, event.prompt, config)) {
       try {
         const cached = getClassifierCacheEntry(ctx.cwd, classifierKey, config);
-        const classified =
-          cached ??
-          (await classifyWithCheapModel(
+        const liveClassification = cached
+          ? undefined
+          : await classifyWithCheapModel(
             event.prompt,
             contextTokens,
             analysis,
             config,
             ctx,
-          ));
+          );
+        classifierPromptTelemetry = liveClassification?.promptTelemetry;
+        const classified = cached ?? liveClassification?.result;
         if (!cached && classified) {
           putClassifierCacheEntry(
             ctx.cwd,
@@ -1791,6 +1903,9 @@ export default function tokenomy(pi: ExtensionAPI) {
       stats.lifetimeEstimatedTokensSaved += promptSavings;
       stats.routedPrompts += 1;
       if (digestPrompt) stats.projectDigestUses += 1;
+      if (classifierPromptTelemetry?.guarded) {
+        stats.compressionGuardRejections += 1;
+      }
       updateIntentStats(stats, analysis, decision);
       try {
         saveStats(ctx.cwd, stats);
@@ -1803,6 +1918,7 @@ export default function tokenomy(pi: ExtensionAPI) {
           decision,
           promptSavings,
           estimatedTokensSaved,
+          classifierPromptTelemetry,
           config,
         );
         statsWarning = undefined;
@@ -1990,6 +2106,7 @@ export default function tokenomy(pi: ExtensionAPI) {
         `Classifier cache hits lifetime: ${stats.classifierCacheHits}`,
         `Project digest uses lifetime: ${stats.projectDigestUses}`,
         `Adaptive fallbacks lifetime: ${stats.adaptiveFallbacks}`,
+        `Compression guard rejections lifetime: ${stats.compressionGuardRejections}`,
         `Baseline model: ${baselineModel ?? "unknown"}`,
         `Cache directory: ${cacheDir(ctx.cwd)}`,
         `Stats file: ${statsPath(ctx.cwd)}`,

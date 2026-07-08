@@ -186,7 +186,8 @@ model, thinking level, and estimated token savings. `/tokenomy status` also
 shows lifetime estimated savings stored locally in `.pi/tokenomy-stats.json`.
 Recent routing decisions are stored locally in
 `.pi/tokenomy-cache/routing-history.json` when telemetry is enabled. Telemetry
-stores prompt hashes and routing metadata, not raw prompt text.
+stores prompt hashes, routing metadata, compression guard status, and estimated
+savings, not raw prompt text.
 
 ## Configuration
 
