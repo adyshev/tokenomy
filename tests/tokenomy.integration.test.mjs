@@ -482,7 +482,7 @@ test("simplifies large prompts before classifier calls", async () => {
   process.env.TOKENOMY_TEST_CLASSIFIER_RESPONSE =
     '{"tier":"medium","confidence":1,"reason":"test failure"}';
   const longLog = [
-    "Please inspect this failing test output in order to choose the best routing tier.",
+    "Please inspect this failing test output and choose the best routing tier.",
     ...Array.from(
       { length: 180 },
       (_, index) =>
@@ -522,6 +522,149 @@ test("simplifies large prompts before classifier calls", async () => {
     /FAIL tests\/tokenomy\.integration\.test\.mjs:42/,
   );
   assert.ok(classifierPrompt.length < longLog.length);
+
+  delete process.env.TOKENOMY_TEST_CLASSIFIER_RESPONSE;
+});
+
+test("preserves routing-critical prompt meaning through simplification and compression", async () => {
+  completeCalls.length = 0;
+  process.env.TOKENOMY_TEST_CLASSIFIER_RESPONSE =
+    '{"tier":"complex","confidence":1,"reason":"critical regression"}';
+  const longPrompt = [
+    "Fix the payment retry regression without changing the public checkout API.",
+    "Keep backwards compatibility for src/payments/retry.ts and add regression coverage.",
+    ...Array.from(
+      { length: 210 },
+      (_, index) =>
+        `noise line ${index} in order to inspect the application implementation documentation due to the fact that configuration may change`,
+    ),
+    "FAIL tests/payments/retry.integration.test.ts:88 retry preserves idempotency key",
+    "Error: expected checkout request to reuse idempotency key payment_retry_123",
+    "Actual: request created duplicate charge for customer cus_tokenomy_test",
+    "Do not delete existing retry backoff behavior.",
+  ].join("\n");
+  const harness = createHarness(
+    createProjectConfig({
+      classifier: {
+        enabled: true,
+        onlyWhenAmbiguous: false,
+        maxPromptChars: 4000,
+        maxEstimatedClassifierTokens: 1400,
+        minConfidence: 1,
+      },
+    }),
+    {
+      classifierAuth: { ok: true, apiKey: "test-key", headers: {}, env: {} },
+    },
+  );
+  await startSession(harness);
+
+  await routePrompt(harness, longPrompt);
+
+  const request = completeCalls[0][1];
+  const classifierPrompt = request.messages[0].content[0].text;
+  assert.match(classifierPrompt, /Prompt simplified: yes/);
+  assert.match(classifierPrompt, /Prompt compressed: yes\/\d+ tokens/);
+  assert.match(classifierPrompt, /payment retry regression/);
+  assert.match(classifierPrompt, /without changing the public checkout API/);
+  assert.match(classifierPrompt, /src\/payments\/retry\.ts/);
+  assert.match(
+    classifierPrompt,
+    /FAIL tests\/payments\/retry\.integration\.test\.ts:88/,
+  );
+  assert.match(classifierPrompt, /idempotency key payment_retry_123/);
+  assert.match(classifierPrompt, /duplicate charge/);
+  assert.match(classifierPrompt, /Do not delete existing retry backoff behavior/);
+
+  delete process.env.TOKENOMY_TEST_CLASSIFIER_RESPONSE;
+});
+
+test("does not rewrite the agent-facing prompt when simplifying classifier input", async () => {
+  completeCalls.length = 0;
+  process.env.TOKENOMY_TEST_CLASSIFIER_RESPONSE =
+    '{"tier":"medium","confidence":1,"reason":"large prompt"}';
+  const protectedInstruction =
+    "FINAL_AGENT_PROMPT_MUST_REMAIN_EXACT: preserve this literal instruction for the selected model.";
+  const longPrompt = [
+    protectedInstruction,
+    ...Array.from(
+      { length: 190 },
+      (_, index) =>
+        `noise line ${index} in order to inspect the application implementation documentation due to the fact that configuration may change`,
+    ),
+    "FAIL tests/tokenomy.integration.test.mjs:314 preserve original prompt",
+  ].join("\n");
+  const harness = createHarness(
+    createProjectConfig({
+      classifier: {
+        enabled: true,
+        onlyWhenAmbiguous: false,
+        maxPromptChars: 4000,
+        maxEstimatedClassifierTokens: 1400,
+        minConfidence: 1,
+      },
+    }),
+    {
+      classifierAuth: { ok: true, apiKey: "test-key", headers: {}, env: {} },
+    },
+  );
+  await startSession(harness);
+
+  const result = await routePrompt(harness, longPrompt);
+
+  assert.equal(completeCalls.length, 1);
+  const classifierPrompt = completeCalls[0][1].messages[0].content[0].text;
+  assert.match(classifierPrompt, /Prompt simplified: yes/);
+  assert.match(classifierPrompt, /Prompt compressed: yes\/\d+ tokens/);
+  assert.equal("prompt" in result, false);
+  assert.doesNotMatch(result.systemPrompt, /FINAL_AGENT_PROMPT_MUST_REMAIN_EXACT/);
+  assert.match(
+    result.systemPrompt,
+    /Tokenomy token discipline is active/,
+  );
+
+  delete process.env.TOKENOMY_TEST_CLASSIFIER_RESPONSE;
+});
+
+test("rejects compression when protected signal lines would be rewritten", async () => {
+  completeCalls.length = 0;
+  process.env.TOKENOMY_TEST_CLASSIFIER_RESPONSE =
+    '{"tier":"medium","confidence":1,"reason":"protected constraint"}';
+  const protectedConstraint =
+    "Do not change checkout retries due to the fact that merchants depend on exact behavior.";
+  const longPrompt = [
+    "Inspect this failing payment output and choose the best routing tier.",
+    ...Array.from(
+      { length: 190 },
+      (_, index) =>
+        `noise line ${index} in order to inspect the application implementation documentation due to the fact that configuration may change`,
+    ),
+    protectedConstraint,
+    "FAIL tests/payments/retry.integration.test.ts:91 protected retry behavior",
+  ].join("\n");
+  const harness = createHarness(
+    createProjectConfig({
+      classifier: {
+        enabled: true,
+        onlyWhenAmbiguous: false,
+        maxPromptChars: 4000,
+        maxEstimatedClassifierTokens: 1400,
+        minConfidence: 1,
+      },
+    }),
+    {
+      classifierAuth: { ok: true, apiKey: "test-key", headers: {}, env: {} },
+    },
+  );
+  await startSession(harness);
+
+  await routePrompt(harness, longPrompt);
+
+  const classifierPrompt = completeCalls[0][1].messages[0].content[0].text;
+  assert.match(classifierPrompt, /Prompt simplified: yes/);
+  assert.match(classifierPrompt, /Prompt compressed: no/);
+  assert.doesNotMatch(classifierPrompt, /\[DECODE\]/);
+  assert.match(classifierPrompt, new RegExp(protectedConstraint));
 
   delete process.env.TOKENOMY_TEST_CLASSIFIER_RESPONSE;
 });

@@ -793,6 +793,7 @@ function isSignalLine(line: string): boolean {
   return hasAny(line.toLowerCase(), [
     /\b(error|fail|failed|failure|exception|traceback|stack trace|warning|warn|fatal|panic|assert|expected|actual)\b/,
     /\b(test|spec|suite|passed|skipped|todo|duration|exit code)\b/,
+    /\b(do not|don't|without|preserve|keep|must|never|backwards? compatibility)\b/,
     /(^|\s)(src|lib|app|test|tests|packages|\.pi|\.github|scripts)\/[\w./-]+(:\d+)?/,
     /\b[a-z0-9_.-]+\.(ts|tsx|js|jsx|mjs|cjs|json|md|py|rs|go|rb|java|kt|yml|yaml|toml|lock)(:\d+)?\b/,
   ]);
@@ -808,9 +809,38 @@ function uniqueLines(lines: string[]): string[] {
   });
 }
 
+function missingRequiredLines(text: string, requiredLines: string[]): string[] {
+  return requiredLines.filter((line) => !text.includes(line));
+}
+
+function fitClassifierText(
+  text: string,
+  requiredLines: string[],
+  maxChars: number,
+): string {
+  const sliced = text.slice(0, maxChars);
+  const missing = missingRequiredLines(sliced, requiredLines);
+  if (!missing.length) return sliced;
+
+  const preserved = [
+    "[Tokenomy preserved signal lines]",
+    ...requiredLines,
+    "",
+    "[Tokenomy classifier excerpt]",
+  ].join("\n");
+  if (preserved.length >= maxChars) return preserved.slice(0, maxChars);
+
+  const remainingLines = sliced
+    .split(/\r?\n/)
+    .filter((line) => !requiredLines.includes(line));
+  const combined = `${preserved}\n${remainingLines.join("\n")}`;
+  return combined.slice(0, maxChars);
+}
+
 function compressPromptText(
   text: string,
   config: TokenomyConfig,
+  requiredLines: string[] = [],
 ): { text: string; compressed: boolean; tokensSaved: number } {
   if (!config.promptSimplification.compressionEnabled) {
     return { text, compressed: false, tokensSaved: 0 };
@@ -827,6 +857,9 @@ function compressPromptText(
       !result.compressed ||
       result.compressed === text
     ) {
+      return { text, compressed: false, tokensSaved: 0 };
+    }
+    if (missingRequiredLines(result.compressed, requiredLines).length) {
       return { text, compressed: false, tokensSaved: 0 };
     }
     return { text: result.compressed, compressed: true, tokensSaved };
@@ -847,14 +880,20 @@ function simplifyPromptForClassifier(
 } {
   if (!config.promptSimplification.enabled) {
     const text = prompt.slice(0, config.classifier.maxPromptChars);
-    const compressed = compressPromptText(text, config);
+    const requiredLines = uniqueLines(
+      text.split(/\r?\n/).map((line) => line.trimEnd()).filter(isSignalLine),
+    );
+    const compressed = compressPromptText(text, config, requiredLines);
     return {
       ...compressed,
       simplified: false,
     };
   }
   if (prompt.length <= config.promptSimplification.maxClassifierPromptChars) {
-    const compressed = compressPromptText(prompt, config);
+    const requiredLines = uniqueLines(
+      prompt.split(/\r?\n/).map((line) => line.trimEnd()).filter(isSignalLine),
+    );
+    const compressed = compressPromptText(prompt, config, requiredLines);
     return { ...compressed, simplified: false };
   }
 
@@ -883,11 +922,12 @@ function simplifyPromptForClassifier(
     ...tail,
   ].join("\n");
 
-  const compressed = compressPromptText(simplified, config);
+  const compressed = compressPromptText(simplified, config, signal);
 
   return {
-    text: compressed.text.slice(
-      0,
+    text: fitClassifierText(
+      compressed.text,
+      signal,
       config.promptSimplification.maxClassifierPromptChars,
     ),
     simplified: true,
