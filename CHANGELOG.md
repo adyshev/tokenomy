@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+
+## 0.1.17-beta - 2026-07-08
 - Made the Tokenomy status/footer text visibly labeled and refreshed by
   `/tokenomy status`.
 - Routed broad review/refactor prompts such as `please do an audit`,
