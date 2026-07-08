@@ -23,6 +23,15 @@
     "enabled": true,
     "maxEntries": 200
   },
+  "memory": {
+    "enabled": true,
+    "inject": true,
+    "maxFacts": 80,
+    "maxInjectedChars": 1200,
+    "maxFactChars": 240,
+    "staleAfterDays": 30,
+    "minContextTokensForInjection": 20000
+  },
   "tools": {
     "manage": false,
     "preserveCustomTools": true,

@@ -285,6 +285,227 @@ test("records prompt-safe routing history", async () => {
   assert.equal(resetHistory.entries.length, 0);
 });
 
+test("learns package commands and injects relevant memory automatically", async () => {
+  const cwd = createProjectConfig();
+  writeFileSync(
+    join(cwd, "package.json"),
+    `${JSON.stringify(
+      {
+        name: "tokenomy-memory-fixture",
+        type: "module",
+        scripts: {
+          test: "node --test",
+          "json:check": "node -e 'JSON.parse(\"{}\")'",
+        },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+  const harness = createHarness(cwd);
+  await startSession(harness);
+
+  const result = await routePrompt(
+    harness,
+    "Run tests for this project. SECRET_MEMORY_TEST_MARKER must not be stored.",
+  );
+
+  assert.match(result.systemPrompt, /Tokenomy project memory is advisory/);
+  assert.match(result.systemPrompt, /Test command is npm test/);
+  assert.match(result.systemPrompt, /Package name is tokenomy-memory-fixture/);
+  assert.match(
+    result.systemPrompt,
+    /The current user prompt overrides it/,
+  );
+
+  const memoryText = readFileSync(
+    join(cwd, ".pi/tokenomy-cache/project-memory.json"),
+    "utf8",
+  );
+  assert.match(memoryText, /Test command is npm test/);
+  assert.doesNotMatch(memoryText, /SECRET_MEMORY_TEST_MARKER/);
+
+  const stats = JSON.parse(
+    readFileSync(join(cwd, ".pi/tokenomy-stats.json"), "utf8"),
+  );
+  assert.equal(stats.memoryInjections, 1);
+
+  const history = JSON.parse(
+    readFileSync(join(cwd, ".pi/tokenomy-cache/routing-history.json"), "utf8"),
+  );
+  assert.equal(history.entries[0].memoryInjected, true);
+  assert.equal(history.entries[0].memoryReason, "project-context");
+  assert.ok(history.entries[0].memoryFactsUsed >= 2);
+  assert.ok(history.entries[0].memoryEstimatedTokensSaved > 0);
+
+  await runTokenomyCommand(harness, "history");
+  assert.match(harness.notifications.at(-1).message, /memory:project-context/);
+
+  await runTokenomyCommand(harness, "memory show");
+  assert.match(harness.notifications.at(-1).message, /Test command is npm test/);
+
+  await runTokenomyCommand(harness, "memory clear");
+  assert.equal(harness.notifications.at(-1).message, "Tokenomy project memory cleared");
+  const clearedMemory = JSON.parse(
+    readFileSync(join(cwd, ".pi/tokenomy-cache/project-memory.json"), "utf8"),
+  );
+  assert.equal(clearedMemory.facts.length, 0);
+});
+
+test("injects release workflow memory for vague release prompts", async () => {
+  const cwd = createProjectConfig();
+  mkdirSync(join(cwd, ".github/workflows"), { recursive: true });
+  writeFileSync(
+    join(cwd, ".github/workflows/npm-publish.yml"),
+    "name: NPM Publish\n",
+    "utf8",
+  );
+  const harness = createHarness(cwd);
+  await startSession(harness);
+
+  const result = await routePrompt(harness, "release it");
+
+  assert.match(result.systemPrompt, /Tokenomy project memory is advisory/);
+  assert.match(
+    result.systemPrompt,
+    /Merging to main can trigger the npm publish GitHub Actions workflow/,
+  );
+
+  const history = JSON.parse(
+    readFileSync(join(cwd, ".pi/tokenomy-cache/routing-history.json"), "utf8"),
+  );
+  assert.equal(history.entries[0].memoryInjected, true);
+  assert.equal(history.entries[0].memoryReason, "release-workflow");
+});
+
+test("does not inject memory for simple shell prompts", async () => {
+  const cwd = createProjectConfig();
+  writeFileSync(
+    join(cwd, "package.json"),
+    `${JSON.stringify({ name: "tokenomy-memory-fixture", scripts: { test: "node --test" } })}\n`,
+    "utf8",
+  );
+  const harness = createHarness(cwd, { contextTokens: 90_000 });
+  await startSession(harness);
+
+  const result = await routePrompt(harness, "ls -l");
+
+  assert.doesNotMatch(result.systemPrompt, /Tokenomy project memory is advisory/);
+  const history = JSON.parse(
+    readFileSync(join(cwd, ".pi/tokenomy-cache/routing-history.json"), "utf8"),
+  );
+  assert.equal(history.entries[0].memoryInjected, false);
+});
+
+test("can disable memory learning and injection", async () => {
+  const cwd = createProjectConfig({
+    memory: {
+      enabled: false,
+      inject: true,
+      maxFacts: 80,
+      maxInjectedChars: 1200,
+      maxFactChars: 240,
+      staleAfterDays: 30,
+      minContextTokensForInjection: 0,
+    },
+  });
+  writeFileSync(
+    join(cwd, "package.json"),
+    `${JSON.stringify({ name: "disabled-memory", scripts: { test: "node --test" } })}\n`,
+    "utf8",
+  );
+  const harness = createHarness(cwd);
+  await startSession(harness);
+
+  const result = await routePrompt(harness, "Run tests for this project.");
+
+  assert.doesNotMatch(result.systemPrompt, /Tokenomy project memory is advisory/);
+  assert.equal(
+    existsSync(join(cwd, ".pi/tokenomy-cache/project-memory.json")),
+    false,
+  );
+});
+
+test("can learn memory while injection is disabled", async () => {
+  const cwd = createProjectConfig({
+    memory: {
+      enabled: true,
+      inject: false,
+      maxFacts: 80,
+      maxInjectedChars: 1200,
+      maxFactChars: 240,
+      staleAfterDays: 30,
+      minContextTokensForInjection: 0,
+    },
+  });
+  writeFileSync(
+    join(cwd, "package.json"),
+    `${JSON.stringify({ name: "learn-only-memory", scripts: { test: "node --test" } })}\n`,
+    "utf8",
+  );
+  const harness = createHarness(cwd);
+  await startSession(harness);
+
+  const result = await routePrompt(harness, "Run tests for this project.");
+
+  assert.doesNotMatch(result.systemPrompt, /Tokenomy project memory is advisory/);
+  const memoryText = readFileSync(
+    join(cwd, ".pi/tokenomy-cache/project-memory.json"),
+    "utf8",
+  );
+  assert.match(memoryText, /learn-only-memory/);
+});
+
+test("skips stale memory facts during injection", async () => {
+  const cwd = createProjectConfig({
+    memory: {
+      enabled: true,
+      inject: true,
+      maxFacts: 80,
+      maxInjectedChars: 1200,
+      maxFactChars: 240,
+      staleAfterDays: 1,
+      minContextTokensForInjection: 0,
+    },
+  });
+  const oldDate = "2020-01-01T00:00:00.000Z";
+  mkdirSync(join(cwd, ".pi/tokenomy-cache"), { recursive: true });
+  writeFileSync(
+    join(cwd, ".pi/tokenomy-cache/project-memory.json"),
+    `${JSON.stringify(
+      {
+        version: 1,
+        project: "stale-memory",
+        updatedAt: oldDate,
+        facts: [
+          {
+            id: "stale-fact",
+            text: "Test command is npm test.",
+            kind: "command",
+            source: "package",
+            confidence: "high",
+            createdAt: oldDate,
+            updatedAt: oldDate,
+            uses: 0,
+          },
+        ],
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+  const harness = createHarness(cwd);
+  await startSession(harness);
+
+  const result = await routePrompt(harness, "Run tests for this project.");
+
+  assert.doesNotMatch(result.systemPrompt, /Tokenomy project memory is advisory/);
+  await runTokenomyCommand(harness, "memory status");
+  assert.match(harness.notifications.at(-1).message, /stale:1/);
+});
+
 test("keeps simple shell listing prompts on the cheap model in large contexts", async () => {
   const harness = createHarness(createProjectConfig(), {
     contextTokens: 90_000,

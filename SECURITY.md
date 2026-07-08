@@ -13,6 +13,7 @@ projects where it runs. The stats file stores local estimated usage counters:
 - Tokenomy session count
 - classifier cache hit count
 - project digest use count
+- memory injection count
 - adaptive fallback count
 - compression guard rejection count
 - per-intent route counters
@@ -31,6 +32,13 @@ does not store raw prompt text or model responses.
 
 Tokenomy does not store raw prompt text, model responses, API keys, or auth
 headers.
+
+Project memory, when enabled, stores short durable facts in
+`.pi/tokenomy-cache/project-memory.json`. Examples include package name, npm
+script commands, known implementation file paths, and CI/release workflow
+hints. Tokenomy does not store raw prompts or model responses in project
+memory. Memory injection is advisory and explicitly lower priority than the
+current user prompt.
 
 ## Model Calls
 

@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+- Added default-on local project memory with automatic safe fact discovery and advisory injection.
+- Added `/tokenomy memory`, `/tokenomy memory show`, `/tokenomy memory refresh`, `/tokenomy memory clear`, `/tokenomy memory on`, and `/tokenomy memory off`.
+- Added memory injection telemetry and tests for value, privacy, disabling, stale facts, and simple-prompt skips.
 - Added prompt-safe local routing telemetry with `/tokenomy history`, `/tokenomy export-history`, and `/tokenomy reset-history`.
 - Added compression guard telemetry and lifetime stats for rejected classifier prompt compression.
 - Added local TokenShrink-based classifier prompt compression.

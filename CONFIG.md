@@ -102,6 +102,34 @@ compression was accepted or rejected by the semantic guard, how many protected
 signal lines triggered the guard, and the attempted compression savings. They
 do not store raw prompt text or model responses.
 
+## Project Memory
+
+```json
+{
+  "memory": {
+    "enabled": true,
+    "inject": true,
+    "maxFacts": 80,
+    "maxInjectedChars": 1200,
+    "maxFactChars": 240,
+    "staleAfterDays": 30,
+    "minContextTokensForInjection": 20000
+  }
+}
+```
+
+Project memory stores short durable facts in
+`.pi/tokenomy-cache/project-memory.json`. It is local, human-readable, and
+enabled by default. Tokenomy learns safe facts automatically from project
+metadata and observed routing context, such as package name, npm scripts,
+important Tokenomy files, CI/publish workflows, and release workflow hints.
+
+When `inject` is true, Tokenomy adds a compact advisory memory block to the
+system prompt only when it is likely to save repeated discovery or tool calls.
+Simple shell prompts such as `ls -l` do not receive memory. Stale facts older
+than `staleAfterDays` are skipped. Memory never rewrites the user prompt, and
+the injected block says that the current user prompt overrides memory.
+
 ## Distillation
 
 ```json
