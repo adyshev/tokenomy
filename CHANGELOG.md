@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+- Added a compact Tokenomy status/footer formatter that shows tier, source,
+  confidence, session savings, and lifetime savings without replacing other
+  plugin status entries.
 - Added local workflow routing for state-changing git/tool chains such as
   `commit & push`, while keeping read-only git inspection prompts cheap.
 
