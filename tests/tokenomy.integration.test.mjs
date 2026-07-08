@@ -175,6 +175,16 @@ async function routePrompt(harness, prompt) {
   );
 }
 
+function inputPrompt(harness, text) {
+  return harness.handlers.get("input")(
+    {
+      text,
+      source: "user",
+    },
+    harness.ctx,
+  );
+}
+
 async function runTokenomyCommand(harness, args) {
   return harness.commands.get("tokenomy").handler(args, harness.ctx);
 }
@@ -283,6 +293,39 @@ test("records prompt-safe routing history", async () => {
   );
   const resetHistory = JSON.parse(readFileSync(historyPath, "utf8"));
   assert.equal(resetHistory.entries.length, 0);
+});
+
+test("bypasses non-English prompts transparently", async () => {
+  const harness = createHarness(createProjectConfig());
+  await startSession(harness);
+  const startupModelCount = harness.selectedModels.length;
+  const startupStatus = harness.statuses.get("tokenomy");
+
+  inputPrompt(harness, "будь ласка зроби аудит проекту");
+  const result = await routePrompt(harness, "будь ласка зроби аудит проекту");
+
+  assert.equal(result, undefined);
+  assert.equal(harness.selectedModels.length, startupModelCount);
+  assert.equal(harness.thinkingLevels.length, 0);
+  assert.equal(harness.notifications.length, 0);
+  assert.equal(harness.statuses.get("tokenomy"), startupStatus);
+  assert.equal(
+    existsSync(join(harness.ctx.cwd, ".pi/tokenomy-cache/routing-history.json")),
+    false,
+  );
+});
+
+test("routes English instructions that contain non-English payload text", async () => {
+  const harness = createHarness(createProjectConfig());
+  await startSession(harness);
+
+  await routePrompt(
+    harness,
+    "Please translate this text and keep the meaning: будь ласка зроби аудит проекту",
+  );
+
+  assert.equal(harness.selectedModels.at(-1), "openai-codex/gpt-5.4-mini");
+  assert.match(harness.notifications.at(-1).message, /Tokenomy:/);
 });
 
 test("learns package commands and injects relevant memory automatically", async () => {

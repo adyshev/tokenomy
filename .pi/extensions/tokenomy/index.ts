@@ -1123,6 +1123,32 @@ function hasAny(lower: string, patterns: RegExp[]): boolean {
   return patterns.some((pattern) => pattern.test(lower));
 }
 
+function shouldBypassForLanguage(prompt: string): boolean {
+  const lower = prompt.toLowerCase();
+  const englishInstructionSignals = [
+    /\b(please|help|can you|could you|would you|do|run|perform|review|audit|scan|inspect|refactor|fix|debug|explain|summari[sz]e|translate|keep|preserve|change|update|implement|read|check)\b/,
+    /\b(this|the)\s+(text|comment|string|message|file|prompt|translation|output|error|log|code)\b/,
+  ];
+  if (hasAny(lower, englishInstructionSignals)) return false;
+
+  const letters = Array.from(prompt.matchAll(/\p{L}/gu), (match) => match[0]);
+  if (letters.length < 4) return false;
+
+  const latinLetters = letters.filter((char) => /\p{Script=Latin}/u.test(char))
+    .length;
+  const nonLatinLetters = letters.length - latinLetters;
+  if (nonLatinLetters === 0) return false;
+
+  const codeOrPathSignals = [
+    /[`{}[\]();=<>]/,
+    /(^|\s)(\.?\/|~\/|src\/|lib\/|app\/|test\/|tests\/|\.pi\/|\.github\/)[\w./-]+/,
+    /\b[\w.-]+\.(ts|tsx|js|jsx|mjs|cjs|json|md|py|rs|go|rb|java|kt|yml|yaml|toml|lock|lua|vim)\b/i,
+  ];
+  if (hasAny(prompt, codeOrPathSignals)) return false;
+
+  return nonLatinLetters / letters.length >= 0.2;
+}
+
 function isSignalLine(line: string): boolean {
   return hasAny(line.toLowerCase(), [
     /\b(error|fail|failed|failure|exception|traceback|stack trace|warning|warn|fatal|panic|assert|expected|actual)\b/,
@@ -2255,6 +2281,7 @@ export default function tokenomy(pi: ExtensionAPI) {
   pi.on("input", (event, ctx) => {
     if (!config.enabled || event.source === "extension")
       return { action: "continue" as const };
+    if (shouldBypassForLanguage(event.text)) return { action: "continue" as const };
     const usage = ctx.getContextUsage();
     const imageCount = event.images?.length ?? 0;
     const analysis = analyzePrompt(
@@ -2269,6 +2296,7 @@ export default function tokenomy(pi: ExtensionAPI) {
 
   pi.on("before_agent_start", async (event, ctx) => {
     if (!config.enabled) return;
+    if (shouldBypassForLanguage(event.prompt)) return;
 
     const usage = ctx.getContextUsage();
     const contextTokens = usage?.tokens;

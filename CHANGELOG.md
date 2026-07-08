@@ -6,6 +6,8 @@
 - Routed broad review/refactor prompts such as `please do an audit`,
   `please review`, and `please refactor` to the complex tier instead of the
   cheapest mini model.
+- Added transparent bypass for prompts written primarily outside English while
+  still allowing English instructions that contain non-English payload text.
 
 ## 0.1.16-beta - 2026-07-08
 - Added a compact Tokenomy status/footer formatter that shows tier, source,

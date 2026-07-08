@@ -58,6 +58,8 @@ Tokenomy is currently focused on one well-defined setup:
 - Project-local routing through `.pi/extensions/tokenomy/index.ts`.
 - Local-only memory, cache, telemetry, and compression. No external database or
   external memory API is used.
+- English-language routing instructions. Prompts written primarily in other
+  languages bypass Tokenomy routing for that turn.
 
 Tokenomy is still beta software. It is ready for private dogfooding and early
 adopter use, but it is not yet a universal model router for every provider,
@@ -191,6 +193,12 @@ Broad review prompts such as `please do an audit`, `please review`, or
 `please refactor` are treated as deep project work and route to the complex
 tier. Targeted audits, such as focused config or dotfiles checks, can still
 route to the medium tier when the scope is narrower.
+
+Tokenomy currently supports English routing instructions only. If a prompt is
+primarily written in another language, Tokenomy bypasses routing transparently
+and leaves the current Pi model/tool state unchanged. English instructions may
+still include non-English text as payload, such as text to translate or a code
+comment to preserve.
 
 For ambiguous prompts, Tokenomy can ask the cheapest configured classifier model
 for a tiny JSON decision. The classifier is only accepted when its confidence is

@@ -18,6 +18,14 @@ or `review` appear in casual language.
 Classifier routing can improve ambiguous cases, but classifier output is only
 accepted above the configured confidence threshold.
 
+## English-Only Routing
+
+Tokenomy currently routes English-language instructions only. Prompts written
+primarily in other languages bypass Tokenomy for that turn so the extension does
+not apply English keyword heuristics incorrectly. English instructions can still
+contain non-English payload text, for example text to translate or comments to
+preserve.
+
 ## Project Memory
 
 Project memory is local and advisory. It can save repeated project discovery,
