@@ -36,7 +36,8 @@ error lines, file paths, and counts from the user's prompt.
 
 TokenShrink prompt compression runs locally through the `tokenshrink` SDK and
 does not call external APIs. It is applied only to classifier excerpts, not to
-the original agent prompt.
+the original agent prompt. It is enabled by default and can be disabled with
+`promptSimplification.compressionEnabled: false`.
 
 Set this to disable classifier calls:
 

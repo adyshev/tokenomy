@@ -2,6 +2,7 @@
 
 ## Unreleased
 - Added local TokenShrink-based classifier prompt compression.
+- Added `promptSimplification.compressionEnabled` to disable TokenShrink compression while keeping it enabled by default.
 - Added local prompt simplification for large classifier prompts and long-output condensation guidance.
 - Fixed simple shell/listing prompts such as `ls -l` routing to the medium tier in large contexts.
 - Reduced duplicate stats writes during digest injection and added regression coverage for corrupted classifier cache handling.

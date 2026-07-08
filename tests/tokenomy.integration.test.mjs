@@ -504,6 +504,7 @@ test("skips classifier prompt compression when savings are too small", async () 
       },
       promptSimplification: {
         enabled: true,
+        compressionEnabled: true,
         minCompressionSavingsTokens: 1000,
         maxClassifierPromptChars: 1600,
         maxLineChars: 240,
@@ -524,6 +525,60 @@ test("skips classifier prompt compression when savings are too small", async () 
   const classifierPrompt = request.messages[0].content[0].text;
   assert.match(classifierPrompt, /Prompt simplified: yes/);
   assert.match(classifierPrompt, /Prompt compressed: no/);
+
+  delete process.env.TOKENOMY_TEST_CLASSIFIER_RESPONSE;
+});
+
+test("disables classifier prompt compression when configured off", async () => {
+  completeCalls.length = 0;
+  process.env.TOKENOMY_TEST_CLASSIFIER_RESPONSE =
+    '{"tier":"medium","confidence":1,"reason":"test failure"}';
+  const longLog = [
+    "Please inspect this failing test output in order to choose the best routing tier.",
+    ...Array.from(
+      { length: 180 },
+      (_, index) =>
+        `noise line ${index} in order to inspect the application implementation documentation due to the fact that configuration may change`,
+    ),
+    "FAIL tests/tokenomy.integration.test.mjs:42 expected cheap route",
+  ].join("\n");
+  const harness = createHarness(
+    createProjectConfig({
+      classifier: {
+        enabled: true,
+        onlyWhenAmbiguous: false,
+        maxPromptChars: 4000,
+        maxEstimatedClassifierTokens: 1400,
+        minConfidence: 1,
+      },
+      promptSimplification: {
+        enabled: true,
+        compressionEnabled: false,
+        minCompressionSavingsTokens: 12,
+        maxClassifierPromptChars: 1600,
+        maxLineChars: 240,
+        headLines: 16,
+        tailLines: 16,
+        preserveSignalLines: 40,
+      },
+    }),
+    {
+      classifierAuth: { ok: true, apiKey: "test-key", headers: {}, env: {} },
+    },
+  );
+  await startSession(harness);
+
+  await routePrompt(harness, longLog);
+
+  const request = completeCalls[0][1];
+  const classifierPrompt = request.messages[0].content[0].text;
+  assert.match(classifierPrompt, /Prompt simplified: yes/);
+  assert.match(classifierPrompt, /Prompt compressed: no/);
+  assert.doesNotMatch(classifierPrompt, /\[DECODE\]/);
+  assert.match(
+    classifierPrompt,
+    /FAIL tests\/tokenomy\.integration\.test\.mjs:42/,
+  );
 
   delete process.env.TOKENOMY_TEST_CLASSIFIER_RESPONSE;
 });

@@ -44,7 +44,7 @@ pi install git:git@github.com:adyshev/tokenomy
 For a pinned release or commit:
 
 ```bash
-pi install https://github.com/adyshev/tokenomy@v0.1.9-beta
+pi install https://github.com/adyshev/tokenomy@v0.1.10-beta
 ```
 
 `pi install` reads the `pi` manifest from `package.json` and enables the

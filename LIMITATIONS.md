@@ -18,6 +18,14 @@ or `review` appear in casual language.
 Classifier routing can improve ambiguous cases, but classifier output is only
 accepted above the configured confidence threshold.
 
+## Classifier Prompt Compression
+
+Prompt simplification and TokenShrink compression apply only to classifier
+excerpts used for routing. They do not change the original prompt sent to the
+selected agent model. Compression can still theoretically affect routing if the
+classifier interprets the compacted excerpt differently, so it can be disabled
+with `promptSimplification.compressionEnabled: false`.
+
 ## Estimated Savings
 
 Token savings are estimates. Tokenomy does not read provider billing data or
@@ -35,8 +43,8 @@ pi --list-models openai-codex
 
 ## Installation Model
 
-Tokenomy can be installed as a Pi package from git. It is not published as an
-npm package yet, and project-specific config still lives in `.pi/tokenomy.json`.
+Tokenomy can be installed as a Pi package from npm or git. Project-specific
+config still lives in `.pi/tokenomy.json`.
 
 ## Test Environment
 
