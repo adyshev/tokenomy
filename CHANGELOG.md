@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+
+## 0.1.15-beta - 2026-07-08
 - Fixed short config-audit prompts such as nvim/tmux final scans routing to
   the cheapest mini model.
 
