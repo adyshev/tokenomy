@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.1.19-beta - 2026-07-08
+- Kept trivial general prompts and single-command local info questions such as
+  `how time is it?` on the cheapest model even in large project contexts.
+
 ## 0.1.18-beta - 2026-07-08
 - Removed Tokenomy's main Pi footer/status entry to avoid crowding or
   conflicting with other extension footers; `/tokenomy status`, notifications,

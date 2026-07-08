@@ -565,6 +565,62 @@ test("keeps simple shell listing prompts on the cheap model in large contexts", 
   );
 });
 
+test("keeps trivial answer prompts on the cheap model in large contexts", async () => {
+  const harness = createHarness(createProjectConfig(), {
+    contextTokens: 90_000,
+  });
+  await startSession(harness);
+
+  for (const prompt of ["how time is it?", "what time is it?", "thanks"]) {
+    await routePrompt(harness, prompt);
+
+    assert.equal(harness.selectedModels.at(-1), "openai-codex/gpt-5.4-mini");
+    assert.equal(harness.thinkingLevels.at(-1), "minimal");
+    assert.match(
+      harness.notifications.at(-1).message,
+      /Tokenomy: simple via local -> openai-codex\/gpt-5\.4-mini, thinking:minimal/,
+    );
+  }
+});
+
+test("keeps single-command local info questions on the cheap model", async () => {
+  const harness = createHarness(createProjectConfig(), {
+    contextTokens: 90_000,
+  });
+  await startSession(harness);
+
+  for (const prompt of [
+    "what is my current directory?",
+    "what node version is installed?",
+    "check disk usage",
+  ]) {
+    await routePrompt(harness, prompt);
+
+    assert.equal(harness.selectedModels.at(-1), "openai-codex/gpt-5.4-mini");
+    assert.equal(harness.thinkingLevels.at(-1), "minimal");
+    assert.match(
+      harness.notifications.at(-1).message,
+      /Tokenomy: simple via local -> openai-codex\/gpt-5\.4-mini, thinking:minimal/,
+    );
+  }
+});
+
+test("does not apply trivial answer routing to project questions", async () => {
+  const harness = createHarness(createProjectConfig(), {
+    contextTokens: 90_000,
+  });
+  await startSession(harness);
+
+  await routePrompt(harness, "what time did tests fail in the log?");
+
+  assert.equal(harness.selectedModels.at(-1), "openai-codex/gpt-5.4");
+  assert.equal(harness.thinkingLevels.at(-1), "low");
+  assert.match(
+    harness.notifications.at(-1).message,
+    /Tokenomy: medium via fallback -> openai-codex\/gpt-5\.4, thinking:low/,
+  );
+});
+
 test("routes short config audit prompts to medium instead of mini", async () => {
   const harness = createHarness(createProjectConfig());
   await startSession(harness);

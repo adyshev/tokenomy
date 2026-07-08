@@ -194,6 +194,12 @@ Broad review prompts such as `please do an audit`, `please review`, or
 tier. Targeted audits, such as focused config or dotfiles checks, can still
 route to the medium tier when the scope is narrower.
 
+Trivial general prompts such as `what time is it?`, `how time is it?`,
+`thanks`, or local info questions answerable with one read-only command stay on
+the cheapest model even when the current project context is large. The trivial
+path is not used when the prompt mentions project files, logs, tests, code, or
+tool work.
+
 Tokenomy currently supports English routing instructions only. If a prompt is
 primarily written in another language, Tokenomy bypasses routing transparently
 and leaves the current Pi model/tool state unchanged. English instructions may

@@ -1358,6 +1358,30 @@ function isLocalWorkflowPrompt(lower: string): boolean {
   ]);
 }
 
+function isTrivialAnswerPrompt(lower: string): boolean {
+  const trimmed = lower.trim();
+  if (
+    hasAny(trimmed, [
+      /^(hi|hello|hey|thanks|thank you|ok|okay|yes|no)[.!?]*$/,
+      /^(please\s+)?(what|which)\s+(time|date|day)\b/,
+      /^(please\s+)?how\s+time\s+is\s+it\b/,
+      /^(please\s+)?what\s+time\s+is\s+it\b/,
+      /^(please\s+)?(what|which|show|check|tell me)\s+(is\s+)?(my\s+)?(current\s+)?(directory|cwd|user|username|shell|hostname|host|os|kernel|timezone|ip address|public ip|local ip)\b/,
+      /^(please\s+)?(check|show|tell me)\s+(disk|memory|ram|cpu|system)\b/,
+      /\b(node|npm|pnpm|yarn|python|python3|pip|git|gh|pi|cargo|rust|go|java|nvim|neovim|tmux)\s+(version|installed)\b/,
+      /^(please\s+)?what\s+does\s+.+\s+mean[?!.]*$/,
+    ])
+  ) {
+    return !hasAny(lower, [
+      /\b(repo|repository|project|codebase|file|files|class|classes|function|functions|test|tests|log|logs|error|failure|stack trace)\b/,
+      /\b(fix|debug|implement|change|modify|edit|write|create|delete|remove|refactor|audit|review|scan|inspect|commit|push)\b/,
+      /(^|\s)(src|lib|app|test|tests|packages|\.pi|\.github|scripts)\//,
+      /\b[\w.-]+\.(ts|tsx|js|jsx|mjs|cjs|json|md|py|rs|go|rb|java|kt|yml|yaml|toml|lock|lua|vim)\b/,
+    ]);
+  }
+  return false;
+}
+
 function classifyIntent(lower: string, toolProfile: ToolProfile): PromptIntent {
   if (
     hasAny(lower.trim(), [
@@ -1518,11 +1542,21 @@ function analyzePrompt(
   }
 
   const intent = classifyIntent(lower, toolProfile);
-  const risk = riskForIntent(intent, toolProfile, contextTokens);
+  const trivialAnswer = toolProfile === "none" && isTrivialAnswerPrompt(lower);
+  const risk = trivialAnswer
+    ? "low"
+    : riskForIntent(intent, toolProfile, contextTokens);
+  if (trivialAnswer) signals.push("trivial-answer");
   signals.push(`intent:${intent}`, `risk:${risk}`);
 
-  let tier: Tier = score >= 4 ? "complex" : score >= 1 ? "medium" : "simple";
-  if (intent === "shell_simple") tier = "simple";
+  let tier: Tier = trivialAnswer
+    ? "simple"
+    : score >= 4
+      ? "complex"
+      : score >= 1
+        ? "medium"
+        : "simple";
+  if (intent === "shell_simple" || trivialAnswer) tier = "simple";
   else if (intent === "release" || intent === "architecture") tier = "complex";
   else if (
     tier === "simple" &&
@@ -1534,7 +1568,9 @@ function analyzePrompt(
     tier = "medium";
   }
   const confidence =
-    tier === "simple"
+    trivialAnswer
+      ? 0.99
+      : tier === "simple"
       ? Math.max(0.5, Math.min(0.99, 0.96 - Math.abs(score) * 0.02))
       : tier === "medium"
         ? Math.max(0.5, Math.min(0.99, 0.93 + Math.min(score, 3) * 0.01))
