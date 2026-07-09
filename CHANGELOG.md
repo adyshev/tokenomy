@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+
+## 0.1.21-beta - 2026-07-09
 - Added default-on model restoration after each prompt so temporary routing
   choices do not leave Pi on the cheaper or stronger selected model.
 - Added local prompt-shape analysis for question/action/mixed prompts,
