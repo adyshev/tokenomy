@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+
+## 0.1.20-beta - 2026-07-09
 - Added durable local telemetry rollups with daily, monthly, and lifetime
   prompt-safe aggregates for estimated savings, route distribution, memory,
   compression, cache, fallback, and guard activity.
