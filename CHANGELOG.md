@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+
+## 0.1.22-beta - 2026-07-09
 - Added opt-in local debug session traces with `/tokenomy debug on`,
   `/tokenomy debug path`, `/tokenomy debug off`, and `debug.trace` config.
   Traces are JSONL files intended for diagnosing routing decisions and include
