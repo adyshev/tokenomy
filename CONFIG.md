@@ -109,9 +109,30 @@ month, and lifetime, so Tokenomy can report savings over time even after recent
 history entries are capped. They include estimated baseline cost units,
 estimated routed cost units, estimated savings, tier/source/intent/model
 distribution, classifier cache hits, memory and compression savings estimates,
-adaptive fallbacks, and compression guard rejections. `rollupRetentionDays`
-controls daily rollup retention and defaults to 400 days; monthly and lifetime
-rollups are retained.
+adaptive fallbacks, prompt-shape distribution, action-count distribution,
+multi-step prompt counts, and compression guard rejections.
+`rollupRetentionDays` controls daily rollup retention and defaults to 400 days;
+monthly and lifetime rollups are retained.
+
+## Routing
+
+```json
+{
+  "routing": {
+    "restoreModelAfterPrompt": true
+  }
+}
+```
+
+`restoreModelAfterPrompt` restores the model that was selected before Tokenomy
+routed a prompt. Tokenomy only restores when the current model still matches
+the model Tokenomy selected for that prompt; if something else changed the model
+during execution, Tokenomy leaves it alone. This is enabled by default so
+temporary downshifts to cheaper models do not leak into the next prompt.
+
+Prompt-shape routing uses the local `compromise` NLP library for sentence,
+question, and verb detection. It does not call an external API or store raw
+prompt text.
 
 ## Project Memory
 

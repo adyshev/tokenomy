@@ -39,6 +39,9 @@
     "readOnlyTools": ["read", "grep", "find", "ls"],
     "writeTools": ["read", "grep", "find", "ls", "edit", "write", "bash"]
   },
+  "routing": {
+    "restoreModelAfterPrompt": true
+  },
   "promptDiscipline": {
     "enabled": true,
     "maxAnswerBulletsSimple": 5

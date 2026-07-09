@@ -34,11 +34,15 @@ Telemetry rollups are stored in `.pi/tokenomy-cache/telemetry-rollups.json`.
 They aggregate daily, monthly, and lifetime counters such as estimated baseline
 cost units, estimated routed cost units, estimated savings, route distribution,
 classifier cache hits, memory savings estimates, compression savings estimates,
-adaptive fallbacks, and compression guard rejections. Rollups do not store raw
-prompt text, prompt hashes, model responses, API keys, or auth headers.
+adaptive fallbacks, prompt-shape distribution, action-count distribution,
+multi-step prompt counts, and compression guard rejections. Rollups do not store
+raw prompt text, prompt hashes, model responses, API keys, or auth headers.
 
 Tokenomy does not store raw prompt text, model responses, API keys, or auth
 headers.
+
+Prompt-shape analysis uses the local `compromise` NLP library. It does not send
+prompt text to an external service.
 
 Project memory, when enabled, stores short durable facts in
 `.pi/tokenomy-cache/project-memory.json`. Examples include package name, npm

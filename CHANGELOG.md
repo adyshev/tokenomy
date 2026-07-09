@@ -1,6 +1,14 @@
 # Changelog
 
 ## Unreleased
+- Added default-on model restoration after each prompt so temporary routing
+  choices do not leave Pi on the cheaper or stronger selected model.
+- Added local prompt-shape analysis for question/action/mixed prompts,
+  action-count signals, multi-step routing, and prompt-shape telemetry.
+- Adopted `compromise` for local sentence, question, and verb analysis in the
+  prompt-shape router.
+- Replaced Tokenomy's local classifier-token estimate with
+  `tokenshrink.countTokens()`.
 
 ## 0.1.20-beta - 2026-07-09
 - Added durable local telemetry rollups with daily, monthly, and lifetime

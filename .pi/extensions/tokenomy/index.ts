@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { complete, type Api, type Model } from "@earendil-works/pi-ai/compat";
-import { compress as shrinkPrompt } from "tokenshrink";
+import nlp from "compromise/three";
+import { compress as shrinkPrompt, countTokens } from "tokenshrink";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -77,6 +78,9 @@ interface TokenomyConfig {
     mediumFallbackMinRisk: RiskLevel;
     complexFallbackIntents: PromptIntent[];
   };
+  routing: {
+    restoreModelAfterPrompt: boolean;
+  };
   thresholds: {
     largeContextTokens: number;
     hugeContextTokens: number;
@@ -113,11 +117,27 @@ interface TokenomyConfig {
   };
 }
 
+type PromptShapeKind = "question" | "action" | "mixed";
+
+interface PromptShape {
+  kind: PromptShapeKind;
+  actionCount: number;
+  multiStep: boolean;
+  signals: string[];
+}
+
+interface PendingModelRestore {
+  restoreModel: Model<Api>;
+  restoreLabel: string;
+  selectedLabel: string;
+}
+
 interface LocalAnalysis {
   tier: Tier;
   intent: PromptIntent;
   risk: RiskLevel;
   toolProfile: ToolProfile;
+  promptShape: PromptShape;
   ambiguous: boolean;
   confidence: number;
   score: number;
@@ -135,6 +155,7 @@ interface RouterDecision {
   confidence?: number;
   signals: string[];
   model?: string;
+  promptShape: PromptShape;
   thinking: ThinkingLevel;
 }
 
@@ -200,6 +221,7 @@ interface RoutingHistoryEntry {
   intent: PromptIntent;
   risk: RiskLevel;
   toolProfile: ToolProfile;
+  promptShape: PromptShape;
   tier: Tier;
   source: RouterDecision["source"];
   confidence?: number;
@@ -238,10 +260,13 @@ interface TelemetryRollupBucket {
   memoryInjections: number;
   adaptiveFallbacks: number;
   classifierCacheHits: number;
+  multiStepPrompts: number;
   tiers: Record<string, number>;
   sources: Record<string, number>;
   intents: Record<string, number>;
   risks: Record<string, number>;
+  promptShapes: Record<string, number>;
+  actionCounts: Record<string, number>;
   models: Record<string, number>;
 }
 
@@ -359,6 +384,9 @@ const DEFAULT_CONFIG: TokenomyConfig = {
     enabled: true,
     mediumFallbackMinRisk: "medium",
     complexFallbackIntents: ["architecture", "release"],
+  },
+  routing: {
+    restoreModelAfterPrompt: true,
   },
   thresholds: {
     largeContextTokens: 80_000,
@@ -483,6 +511,26 @@ function safeInt(value: unknown): number {
   return typeof value === "number" ? Math.max(0, Math.round(value)) : 0;
 }
 
+function loadPromptShape(value: unknown): PromptShape {
+  if (!isObject(value)) {
+    return { kind: "action", actionCount: 0, multiStep: false, signals: [] };
+  }
+  const kind =
+    value.kind === "question" || value.kind === "action" || value.kind === "mixed"
+      ? value.kind
+      : "action";
+  return {
+    kind,
+    actionCount: safeInt(value.actionCount),
+    multiStep: value.multiStep === true,
+    signals: Array.isArray(value.signals)
+      ? value.signals.filter(
+          (signal): signal is string => typeof signal === "string",
+        )
+      : [],
+  };
+}
+
 function loadStats(cwd: string): TokenomyStats {
   const parsed = loadJson(statsPath(cwd));
   if (!isObject(parsed)) return emptyStats();
@@ -544,6 +592,7 @@ function loadRoutingHistory(cwd: string): RoutingHistory {
           typeof entry.intent === "string" &&
           typeof entry.risk === "string" &&
           typeof entry.toolProfile === "string" &&
+          (entry.promptShape === undefined || isObject(entry.promptShape)) &&
           (entry.tier === "simple" ||
             entry.tier === "medium" ||
             entry.tier === "complex") &&
@@ -559,7 +608,10 @@ function loadRoutingHistory(cwd: string): RoutingHistory {
           typeof entry.promptSimplificationEnabled === "boolean" &&
           typeof entry.promptCompressionEnabled === "boolean",
       )
-      .map((entry) => entry as RoutingHistoryEntry),
+      .map((entry) => ({
+        ...(entry as RoutingHistoryEntry),
+        promptShape: loadPromptShape((entry as Record<string, unknown>).promptShape),
+      })),
   };
 }
 
@@ -587,10 +639,13 @@ function emptyRollupBucket(): TelemetryRollupBucket {
     memoryInjections: 0,
     adaptiveFallbacks: 0,
     classifierCacheHits: 0,
+    multiStepPrompts: 0,
     tiers: {},
     sources: {},
     intents: {},
     risks: {},
+    promptShapes: {},
+    actionCounts: {},
     models: {},
   };
 }
@@ -628,10 +683,13 @@ function loadRollupBucket(value: unknown): TelemetryRollupBucket {
     memoryInjections: safeInt(value.memoryInjections),
     adaptiveFallbacks: safeInt(value.adaptiveFallbacks),
     classifierCacheHits: safeInt(value.classifierCacheHits),
+    multiStepPrompts: safeInt(value.multiStepPrompts),
     tiers: safeNumberMap(value.tiers),
     sources: safeNumberMap(value.sources),
     intents: safeNumberMap(value.intents),
     risks: safeNumberMap(value.risks),
+    promptShapes: safeNumberMap(value.promptShapes),
+    actionCounts: safeNumberMap(value.actionCounts),
     models: safeNumberMap(value.models),
   };
 }
@@ -1150,6 +1208,9 @@ function validateConfig(config: TokenomyConfig): string[] {
   ) {
     warnings.push("cache.maxClassifierEntries must be at least 1");
   }
+  if (typeof config.routing.restoreModelAfterPrompt !== "boolean") {
+    warnings.push("routing.restoreModelAfterPrompt must be a boolean");
+  }
   if (typeof config.telemetry.enabled !== "boolean") {
     warnings.push("telemetry.enabled must be a boolean");
   }
@@ -1266,10 +1327,6 @@ function loadConfig(cwd: string): { config: TokenomyConfig; warnings: string[] }
 
   warnings.push(...validateConfig(config));
   return { config, warnings };
-}
-
-function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
 }
 
 function truncateLine(line: string, maxChars: number): string {
@@ -1540,6 +1597,121 @@ function isTrivialAnswerPrompt(lower: string): boolean {
   return false;
 }
 
+const PROMPT_ACTION_VERBS = new Set([
+  "add",
+  "analyze",
+  "audit",
+  "bump",
+  "change",
+  "check",
+  "commit",
+  "configure",
+  "create",
+  "debug",
+  "delete",
+  "edit",
+  "fix",
+  "implement",
+  "inspect",
+  "install",
+  "merge",
+  "modify",
+  "optimize",
+  "patch",
+  "publish",
+  "push",
+  "refactor",
+  "release",
+  "remove",
+  "review",
+  "rewrite",
+  "run",
+  "scan",
+  "tag",
+  "update",
+  "verify",
+  "write",
+]);
+
+const ACTION_VERB_ALIASES: Record<string, string> = {
+  analyse: "analyze",
+  analysed: "analyze",
+  analyses: "analyze",
+  analysing: "analyze",
+  analyzing: "analyze",
+  optimise: "optimize",
+  optimised: "optimize",
+  optimises: "optimize",
+  optimized: "optimize",
+  optimising: "optimize",
+  optimizing: "optimize",
+};
+
+function normalizeActionVerb(value: string): string {
+  const lower = value.toLowerCase().replace(/[^a-z-]/g, "");
+  if (!lower) return "";
+  const first = lower.split("-")[0] ?? lower;
+  if (ACTION_VERB_ALIASES[first]) return ACTION_VERB_ALIASES[first];
+  if (PROMPT_ACTION_VERBS.has(first)) return first;
+  if (first.endsWith("ing") && PROMPT_ACTION_VERBS.has(first.slice(0, -3))) {
+    return first.slice(0, -3);
+  }
+  if (first.endsWith("ed") && PROMPT_ACTION_VERBS.has(first.slice(0, -2))) {
+    return first.slice(0, -2);
+  }
+  if (first.endsWith("s") && PROMPT_ACTION_VERBS.has(first.slice(0, -1))) {
+    return first.slice(0, -1);
+  }
+  return "";
+}
+
+function compromiseActionVerbs(doc: ReturnType<typeof nlp>): string[] {
+  return doc
+    .verbs()
+    .json({ normal: true })
+    .map((entry: { verb?: { infinitive?: string }; normal?: string; text?: string }) =>
+      normalizeActionVerb(
+        entry.verb?.infinitive ?? entry.normal ?? entry.text ?? "",
+      ),
+    )
+    .filter(Boolean);
+}
+
+function tokenActionVerbs(text: string): string[] {
+  return text
+    .toLowerCase()
+    .split(/[^a-z-]+/)
+    .map(normalizeActionVerb)
+    .filter(Boolean);
+}
+
+function analyzePromptShape(prompt: string): PromptShape {
+  const lower = prompt.toLowerCase();
+  const doc = nlp(prompt);
+  const actions = [
+    ...new Set([...compromiseActionVerbs(doc), ...tokenActionVerbs(prompt)]),
+  ];
+  const actionCount = actions.length;
+  const question = doc.questions().out("array").length > 0;
+  const hasAction = actionCount > 0;
+  const multiStep =
+    actionCount >= 3 ||
+    hasAny(lower, [
+      /\b(step by step|multi[- ]step|end[- ]to[- ]end|e2e|full flow)\b/,
+      /\b(and then|then|after that|also|in addition|as well as)\b/,
+      /\b(back and forth|all caveats|all gaps|everything needed)\b/,
+    ]);
+  const kind: PromptShapeKind =
+    question && hasAction ? "mixed" : question ? "question" : "action";
+  const signals = [
+    `shape:${kind}`,
+    `actions:${actionCount}`,
+    ...(actions.length ? [`action-verbs:${actions.slice(0, 5).join("+")}`] : []),
+    ...(multiStep ? ["multi-step"] : []),
+  ];
+  return { kind, actionCount, multiStep, signals };
+}
+
 function classifyIntent(lower: string, toolProfile: ToolProfile): PromptIntent {
   if (
     hasAny(lower.trim(), [
@@ -1603,6 +1775,7 @@ function analyzePrompt(
   config: TokenomyConfig,
 ): LocalAnalysis {
   const lower = prompt.toLowerCase();
+  const promptShape = analyzePromptShape(prompt);
   const signals: string[] = [];
   let score = 0;
 
@@ -1622,6 +1795,9 @@ function analyzePrompt(
   if ((contextTokens ?? 0) >= config.thresholds.hugeContextTokens)
     add(2, "huge-context");
   if (imageCount > 0) add(1, "images");
+  signals.push(...promptShape.signals);
+  if (promptShape.multiStep) add(5, "multi-step-action");
+  else if (promptShape.kind === "mixed") add(1, "mixed-question-action");
 
   if (
     hasAny(lower, [
@@ -1715,6 +1891,7 @@ function analyzePrompt(
         ? "medium"
         : "simple";
   if (intent === "shell_simple" || trivialAnswer) tier = "simple";
+  else if (promptShape.multiStep) tier = "complex";
   else if (intent === "release" || intent === "architecture") tier = "complex";
   else if (
     tier === "simple" &&
@@ -1735,13 +1912,14 @@ function analyzePrompt(
         : Math.max(0.5, Math.min(0.99, 0.9 + Math.min(score, 6) * 0.015));
   const ambiguous = confidence < 0.96;
   const estimatedClassifierTokens =
-    estimateTokens(prompt.slice(0, config.classifier.maxPromptChars)) + 220;
+    countTokens(prompt.slice(0, config.classifier.maxPromptChars)) + 220;
 
   return {
     tier,
     intent,
     risk,
     toolProfile,
+    promptShape,
     ambiguous,
     confidence,
     score,
@@ -2063,6 +2241,7 @@ function recordRoutingHistory(
     intent: analysis.intent,
     risk: analysis.risk,
     toolProfile: analysis.toolProfile,
+    promptShape: analysis.promptShape,
     tier: decision.tier,
     source: decision.source,
     confidence: decision.confidence,
@@ -2125,6 +2304,7 @@ function addRollupSample(
   );
   if (classifierPromptTelemetry?.guarded) bucket.compressionGuardRejections += 1;
   if (memoryInjection) bucket.memoryInjections += 1;
+  if (analysis.promptShape.multiStep) bucket.multiStepPrompts += 1;
   if (decision.source === "fallback" && decision.tier !== "simple") {
     bucket.adaptiveFallbacks += 1;
   }
@@ -2133,6 +2313,8 @@ function addRollupSample(
   incrementCounter(bucket.sources, decision.source);
   incrementCounter(bucket.intents, analysis.intent);
   incrementCounter(bucket.risks, analysis.risk);
+  incrementCounter(bucket.promptShapes, analysis.promptShape.kind);
+  incrementCounter(bucket.actionCounts, String(analysis.promptShape.actionCount));
   incrementCounter(bucket.models, decision.model);
 }
 
@@ -2443,6 +2625,7 @@ function formatRoutingHistoryEntry(entry: RoutingHistoryEntry): string {
   const memory = entry.memoryInjected
     ? `memory:${entry.memoryReason ?? "injected"} facts:${entry.memoryFactsUsed ?? 0} chars:${entry.memoryInjectedChars ?? 0}`
     : "memory:no";
+  const shape = `shape:${entry.promptShape.kind} actions:${entry.promptShape.actionCount}${entry.promptShape.multiStep ? " multi-step" : ""}`;
   return [
     entry.at,
     `${entry.tier}/${entry.source}`,
@@ -2450,6 +2633,7 @@ function formatRoutingHistoryEntry(entry: RoutingHistoryEntry): string {
     `thinking:${entry.thinking}`,
     `intent:${entry.intent}`,
     `risk:${entry.risk}`,
+    shape,
     `confidence:${confidence}`,
     `ctx:${entry.contextBucket}`,
     `saved:${entry.estimatedTokensSaved}`,
@@ -2476,6 +2660,7 @@ function mergeRollupBucket(
   target.memoryInjections += source.memoryInjections;
   target.adaptiveFallbacks += source.adaptiveFallbacks;
   target.classifierCacheHits += source.classifierCacheHits;
+  target.multiStepPrompts += source.multiStepPrompts;
   for (const [key, value] of Object.entries(source.tiers)) {
     target.tiers[key] = (target.tiers[key] ?? 0) + value;
   }
@@ -2487,6 +2672,12 @@ function mergeRollupBucket(
   }
   for (const [key, value] of Object.entries(source.risks)) {
     target.risks[key] = (target.risks[key] ?? 0) + value;
+  }
+  for (const [key, value] of Object.entries(source.promptShapes)) {
+    target.promptShapes[key] = (target.promptShapes[key] ?? 0) + value;
+  }
+  for (const [key, value] of Object.entries(source.actionCounts)) {
+    target.actionCounts[key] = (target.actionCounts[key] ?? 0) + value;
   }
   for (const [key, value] of Object.entries(source.models)) {
     target.models[key] = (target.models[key] ?? 0) + value;
@@ -2545,10 +2736,13 @@ function formatTelemetryReport(
     `Memory injections: ${bucket.memoryInjections}`,
     `Classifier cache hits: ${bucket.classifierCacheHits}`,
     `Adaptive fallbacks: ${bucket.adaptiveFallbacks}`,
+    `Multi-step prompts: ${bucket.multiStepPrompts}`,
     `Compression guard rejections: ${bucket.compressionGuardRejections}`,
     topCounters("Tiers", bucket.tiers),
     topCounters("Sources", bucket.sources),
     topCounters("Intents", bucket.intents),
+    topCounters("Prompt shapes", bucket.promptShapes),
+    topCounters("Action counts", bucket.actionCounts),
     topCounters("Models", bucket.models, 3),
     `Rollup updated: ${rollups.updatedAt || "never"}`,
     `Rollup file: ${telemetryRollupsPath(cwd)}`,
@@ -2603,6 +2797,21 @@ function formatMemoryFact(fact: ProjectMemoryFact): string {
   return `${fact.id} | ${fact.kind}/${fact.source}/${fact.confidence} | uses:${fact.uses} | ${fact.text}`;
 }
 
+async function restoreModelIfPending(
+  pendingRestore: PendingModelRestore | undefined,
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+): Promise<undefined> {
+  if (!pendingRestore) return undefined;
+  const currentLabel = modelLabel(ctx.model);
+  if (currentLabel !== pendingRestore.selectedLabel) return undefined;
+  await pi.setModel(pendingRestore.restoreModel);
+  if (ctx.hasUI) {
+    ctx.ui.notify(`Tokenomy restored model -> ${pendingRestore.restoreLabel}`, "info");
+  }
+  return undefined;
+}
+
 export default function tokenomy(pi: ExtensionAPI) {
   let config = DEFAULT_CONFIG;
   let lastDecision: RouterDecision | undefined;
@@ -2612,6 +2821,7 @@ export default function tokenomy(pi: ExtensionAPI) {
   let stats: TokenomyStats = emptyStats();
   let statsWarning: string | undefined;
   let statsSessionRecorded = false;
+  let pendingModelRestore: PendingModelRestore | undefined;
 
   pi.registerFlag("tokenomy-off", {
     description: "Disable the Tokenomy token-saving router for this run",
@@ -2619,12 +2829,23 @@ export default function tokenomy(pi: ExtensionAPI) {
     default: false,
   });
 
+  const restoreAfterAgent = async (_event: unknown, ctx: ExtensionContext) => {
+    const pending = pendingModelRestore;
+    pendingModelRestore = undefined;
+    await restoreModelIfPending(pending, pi, ctx);
+  };
+
+  pi.on("after_agent_end", restoreAfterAgent);
+  pi.on("after_agent_finish", restoreAfterAgent);
+  pi.on("after_agent_complete", restoreAfterAgent);
+
   pi.on("session_start", async (_event, ctx) => {
     const loaded = loadConfig(ctx.cwd);
     config = loaded.config;
     configWarnings = loaded.warnings;
     if (pi.getFlag("tokenomy-off")) config = { ...config, enabled: false };
     baselineModel = modelLabel(ctx.model);
+    pendingModelRestore = undefined;
     statsWarning = undefined;
     try {
       stats = loadStats(ctx.cwd);
@@ -2675,6 +2896,8 @@ export default function tokenomy(pi: ExtensionAPI) {
     if (!config.enabled) return;
     if (shouldBypassForLanguage(event.prompt)) return;
 
+    pendingModelRestore = undefined;
+    const modelBeforeRouting = ctx.model;
     const usage = ctx.getContextUsage();
     const contextTokens = usage?.tokens;
     const imageCount = event.images?.length ?? 0;
@@ -2785,14 +3008,17 @@ export default function tokenomy(pi: ExtensionAPI) {
       confidence: decisionConfidence,
       signals: analysis.signals,
       model: modelLabel(target),
+      promptShape: analysis.promptShape,
       thinking,
     };
 
+    let switchedModel = false;
     if (target && !config.debug.dryRun) {
       const alreadySelected =
         ctx.model?.provider === target.provider && ctx.model?.id === target.id;
       if (!alreadySelected) {
         const ok = await pi.setModel(target);
+        switchedModel = ok;
         if (!ok && ctx.hasUI) {
           ctx.ui.notify(
             `Tokenomy: no auth for ${target.provider}/${target.id}`,
@@ -2805,6 +3031,23 @@ export default function tokenomy(pi: ExtensionAPI) {
         `Tokenomy: no configured model found for ${tier}`,
         "warning",
       );
+    }
+
+    const originalLabel = modelLabel(modelBeforeRouting);
+    const selectedLabel = modelLabel(target);
+    if (
+      config.routing.restoreModelAfterPrompt &&
+      switchedModel &&
+      modelBeforeRouting &&
+      originalLabel &&
+      selectedLabel &&
+      originalLabel !== selectedLabel
+    ) {
+      pendingModelRestore = {
+        restoreModel: modelBeforeRouting,
+        restoreLabel: originalLabel,
+        selectedLabel,
+      };
     }
 
     if (!config.debug.dryRun) pi.setThinkingLevel(thinking);
@@ -3105,6 +3348,7 @@ export default function tokenomy(pi: ExtensionAPI) {
           `Intent: ${lastDecision.intent}`,
           `Risk: ${lastDecision.risk}`,
           `Tool profile: ${lastDecision.toolProfile}`,
+          `Prompt shape: ${lastDecision.promptShape.kind}, actions:${lastDecision.promptShape.actionCount}, multi-step:${lastDecision.promptShape.multiStep ? "yes" : "no"}`,
           `Confidence: ${lastDecision.confidence === undefined ? "n/a" : `${Math.round(lastDecision.confidence * 100)}%`}`,
           `Reason: ${lastDecision.reason}`,
           `Signals: ${lastDecision.signals.join(", ") || "none"}`,
@@ -3134,6 +3378,7 @@ export default function tokenomy(pi: ExtensionAPI) {
         memorySummary(safeLoadProjectMemory(ctx.cwd), config),
         `Prompt simplification: ${config.promptSimplification.enabled ? "enabled" : "disabled"}`,
         `Prompt compression: ${config.promptSimplification.compressionEnabled ? "enabled" : "disabled"}`,
+        `Restore model after prompt: ${config.routing.restoreModelAfterPrompt ? "enabled" : "disabled"}`,
         `Tool management: ${config.tools.manage ? "enabled" : "disabled"}`,
         `Last decision: ${lastDecision ? `${lastDecision.tier} via ${lastDecision.source}, model=${lastDecision.model ?? "none"}, thinking=${lastDecision.thinking}, reason=${lastDecision.reason}` : "none"}`,
         `Estimated tokens saved this session: ${estimatedTokensSaved}`,
