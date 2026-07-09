@@ -175,6 +175,10 @@ async function routePrompt(harness, prompt) {
   );
 }
 
+async function finishAgent(harness, eventName = "after_agent_end") {
+  return harness.handlers.get(eventName)?.({}, harness.ctx);
+}
+
 function inputPrompt(harness, text) {
   return harness.handlers.get("input")(
     {
@@ -231,6 +235,85 @@ test("switches down for simple prompts and back up for complex prompts", async (
     harness.notifications.at(-1).message,
     /Tokenomy: complex via local -> openai-codex\/gpt-5\.5, thinking:medium/,
   );
+});
+
+test("restores the pre-route model after a prompt finishes", async () => {
+  const harness = createHarness(createProjectConfig());
+  await startSession(harness);
+
+  await routePrompt(harness, "What time is it?");
+
+  assert.equal(harness.selectedModels.at(-1), "openai-codex/gpt-5.4-mini");
+  await finishAgent(harness);
+
+  assert.equal(harness.selectedModels.at(-1), "openai-codex/gpt-5.5");
+  assert.match(
+    harness.notifications.at(-1).message,
+    /Tokenomy restored model -> openai-codex\/gpt-5\.5/,
+  );
+
+  await finishAgent(harness, "after_agent_finish");
+  assert.equal(
+    harness.selectedModels.filter((model) => model === "openai-codex/gpt-5.5")
+      .length,
+    2,
+  );
+});
+
+test("does not restore the model when disabled or when the selected model changed", async () => {
+  const disabledHarness = createHarness(
+    createProjectConfig({ routing: { restoreModelAfterPrompt: false } }),
+  );
+  await startSession(disabledHarness);
+  await routePrompt(disabledHarness, "What time is it?");
+  await finishAgent(disabledHarness);
+  assert.equal(disabledHarness.selectedModels.at(-1), "openai-codex/gpt-5.4-mini");
+
+  const changedHarness = createHarness(createProjectConfig());
+  await startSession(changedHarness);
+  await routePrompt(changedHarness, "What time is it?");
+  changedHarness.ctx.model = { provider: "openai-codex", id: "gpt-5.4" };
+  await finishAgent(changedHarness);
+
+  assert.equal(changedHarness.selectedModels.at(-1), "openai-codex/gpt-5.4-mini");
+});
+
+test("routes multi-action prompts to complex and records prompt shape", async () => {
+  const harness = createHarness(createProjectConfig());
+  await startSession(harness);
+
+  await routePrompt(
+    harness,
+    "Please inspect the repo, fix failing tests, and update the docs.",
+  );
+
+  assert.equal(harness.selectedModels.at(-1), "openai-codex/gpt-5.5");
+  assert.match(
+    harness.notifications.at(-1).message,
+    /Tokenomy: complex via local -> openai-codex\/gpt-5\.5, thinking:medium/,
+  );
+
+  const history = JSON.parse(
+    readFileSync(
+      join(harness.ctx.cwd, ".pi/tokenomy-cache/routing-history.json"),
+      "utf8",
+    ),
+  );
+  assert.equal(history.entries[0].promptShape.kind, "action");
+  assert.equal(history.entries[0].promptShape.multiStep, true);
+  assert.ok(history.entries[0].promptShape.actionCount >= 3);
+
+  const rollups = JSON.parse(
+    readFileSync(
+      join(harness.ctx.cwd, ".pi/tokenomy-cache/telemetry-rollups.json"),
+      "utf8",
+    ),
+  );
+  assert.equal(rollups.lifetime.promptShapes.action, 1);
+  assert.equal(rollups.lifetime.multiStepPrompts, 1);
+
+  await runTokenomyCommand(harness, "explain");
+  assert.match(harness.notifications.at(-1).message, /Prompt shape: action/);
 });
 
 test("uses the cheapest fallback model when confidence is below threshold", async () => {
@@ -296,6 +379,8 @@ test("records prompt-safe routing history", async () => {
   assert.ok(rollups.lifetime.estimatedTokensSaved > 0);
   assert.equal(rollups.lifetime.tiers.simple, 1);
   assert.equal(rollups.lifetime.sources.fallback, 1);
+  assert.equal(rollups.lifetime.promptShapes.action, 1);
+  assert.equal(rollups.lifetime.actionCounts["0"], 1);
   assert.equal(rollups.lifetime.models["openai-codex/gpt-5.4-mini"], 1);
 
   await runTokenomyCommand(harness, "report 30d");
@@ -309,6 +394,7 @@ test("records prompt-safe routing history", async () => {
     /Estimated savings: \d+ token-equivalent units \(\d+%\)/,
   );
   assert.match(harness.notifications.at(-1).message, /Tiers: simple:1/);
+  assert.match(harness.notifications.at(-1).message, /Prompt shapes: action:1/);
 
   await runTokenomyCommand(harness, "export-history");
   assert.match(
@@ -779,7 +865,7 @@ test("uses adaptive complex fallback for risky low-confidence classifier results
 
   await routePrompt(
     harness,
-    "Please plan the npm release, update GitHub Actions if needed, publish the package, tag the release, and verify the full production flow.",
+    "Please handle the production release carefully.",
   );
 
   assert.equal(harness.selectedModels.at(-1), "openai-codex/gpt-5.5");

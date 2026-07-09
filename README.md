@@ -33,6 +33,10 @@ likely to cost more through retries, excessive tool calls, or incorrect edits.
 
 - Routes simple and low-risk prompts to cheaper Codex models.
 - Upshifts complex, risky, debug, architecture, and release prompts.
+- Detects prompt shape locally with `compromise`, including
+  question/action/mixed prompts and concrete multi-step action requests.
+- Restores the pre-route model after each prompt when Tokenomy temporarily
+  downshifts or upshifts.
 - Uses a confidence threshold before trusting classifier decisions.
 - Falls back conservatively when routing confidence is too low.
 - Learns local project memory such as package names, test commands, important
@@ -192,6 +196,8 @@ The local heuristic assigns:
   `multi_edit`, `debug`, `architecture`, `local_workflow`, or `release`
 - a risk level: `low`, `medium`, or `high`
 - a tool profile: `none`, `read`, or `write`
+- a prompt shape: `question`, `action`, or `mixed`, plus action count and
+  multi-step signal
 - a confidence score
 - a list of signals that explain the decision
 
@@ -204,6 +210,14 @@ Broad review prompts such as `please do an audit`, `please review`, or
 `please refactor` are treated as deep project work and route to the complex
 tier. Targeted audits, such as focused config or dotfiles checks, can still
 route to the medium tier when the scope is narrower.
+
+Tokenomy also analyzes prompt shape locally without a model call. It uses the
+`compromise` NLP library for sentence, question, and verb detection, then
+applies Tokenomy's coding-agent action filters. Simple questions can stay cheap,
+but explicit multi-step requests or prompts with several concrete actions route
+to the complex tier because a weak first attempt is likely to cost more through
+retries. Focused single edits and local workflows can still route to the medium
+tier.
 
 Trivial general prompts such as `what time is it?`, `how time is it?`,
 `thanks`, or local info questions answerable with one read-only command stay on
@@ -266,6 +280,11 @@ Tokenomy also adjusts thinking level by tier:
 - `medium`: low thinking
 - `complex`: medium thinking
 
+After a prompt finishes, Tokenomy restores the model that was selected before
+the routing decision, as long as the current model still matches the model
+Tokenomy selected. If the model changed during execution, Tokenomy leaves it
+alone. This keeps cheap-model choices from leaking into the next prompt.
+
 Decision notifications show the selected tier, source, model, thinking level,
 and estimated token savings. Tokenomy does not write a main Pi footer/status
 entry because Pi renders plugin footers in shared terminal space and long
@@ -281,8 +300,9 @@ Longer-term telemetry is stored in
 prompt-safe aggregates. Rollups include estimated baseline cost units,
 estimated routed cost units, estimated savings, route distribution, classifier
 cache hits, memory savings estimates, compression savings estimates, adaptive
-fallbacks, and compression guard rejections. These rollups are the main local
-evidence source for checking whether Tokenomy is saving tokens over time.
+fallbacks, prompt-shape distribution, action-count distribution, multi-step
+prompt counts, and compression guard rejections. These rollups are the main
+local evidence source for checking whether Tokenomy is saving tokens over time.
 
 ## Configuration
 
