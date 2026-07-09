@@ -1,6 +1,10 @@
 # Changelog
 
 ## Unreleased
+- Added opt-in local debug session traces with `/tokenomy debug on`,
+  `/tokenomy debug path`, `/tokenomy debug off`, and `debug.trace` config.
+  Traces are JSONL files intended for diagnosing routing decisions and include
+  a clear warning because they can contain raw session data.
 
 ## 0.1.21-beta - 2026-07-09
 - Added default-on model restoration after each prompt so temporary routing
