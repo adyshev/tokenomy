@@ -576,6 +576,35 @@ function debugWarningMessage(path: string): string {
   ].join("\n");
 }
 
+function debugSessionSnapshot(
+  ctx: ExtensionContext,
+  config: TokenomyConfig,
+  baselineModel: string | undefined,
+  lastDecision: RouterDecision | undefined,
+): Record<string, unknown> {
+  return {
+    version: packageVersion(),
+    provider: config.provider,
+    baselineModel,
+    currentModel: modelLabel(ctx.model),
+    cwd: ctx.cwd,
+    rawCapture: true,
+    warning: "Debug trace contains raw session data.",
+    lastDecision,
+    config: {
+      enabled: config.enabled,
+      models: config.models,
+      classifier: config.classifier,
+      telemetry: config.telemetry,
+      memory: config.memory,
+      adaptive: config.adaptive,
+      routing: config.routing,
+      debug: config.debug,
+      promptSimplification: config.promptSimplification,
+    },
+  };
+}
+
 function statsPath(cwd: string): string {
   return join(cwd, CONFIG_DIR_NAME, "tokenomy-stats.json");
 }
@@ -665,13 +694,10 @@ function loadStats(cwd: string): TokenomyStats {
 }
 
 function saveStats(cwd: string, stats: TokenomyStats): void {
-  const next = {
-    ...stats,
-    updatedAt: new Date().toISOString(),
-  };
+  stats.updatedAt = new Date().toISOString();
   const path = statsPath(cwd);
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+  writeFileSync(path, `${JSON.stringify(stats, null, 2)}\n`, "utf8");
 }
 
 function loadRoutingHistory(cwd: string): RoutingHistory {
@@ -2032,6 +2058,42 @@ function analyzePrompt(
   };
 }
 
+function isContextualContinuationPrompt(prompt: string): boolean {
+  const normalized = prompt.trim().toLowerCase().replace(/[.!?]+$/g, "");
+  if (!normalized || normalized.length > 80) return false;
+  return hasAny(normalized, [
+    /^(please\s+)?(continue|go on|proceed|keep going|carry on|resume)$/,
+    /^(yes|yep|ok|okay|sure|sounds good|do it|go ahead)$/,
+    /^(continue|proceed|resume)\s+(please|with it|the work|this|that)$/,
+    /^(keep|continue)\s+(working|going)\s*(on\s+(it|this|that))?$/,
+  ]);
+}
+
+function applyContinuationContext(
+  analysis: LocalAnalysis,
+  prompt: string,
+  previous: RouterDecision | undefined,
+): LocalAnalysis {
+  if (!previous || !isContextualContinuationPrompt(prompt)) return analysis;
+  return {
+    ...analysis,
+    tier: previous.tier,
+    intent: previous.intent,
+    risk: previous.risk,
+    toolProfile: previous.toolProfile,
+    ambiguous: false,
+    confidence: Math.max(analysis.confidence, 0.98),
+    signals: Array.from(
+      new Set([
+        ...analysis.signals,
+        "contextual-continuation",
+        `previous-tier:${previous.tier}`,
+        `previous-intent:${previous.intent}`,
+      ]),
+    ),
+  };
+}
+
 function parseModelSpec(
   spec: string,
   defaultProvider: string,
@@ -2992,25 +3054,12 @@ export default function tokenomy(pi: ExtensionAPI) {
     baselineModel = modelLabel(ctx.model);
     pendingModelRestore = undefined;
     debugTrace = config.debug.trace ? startDebugTrace(ctx.cwd) : undefined;
-    traceEvent(debugTrace, "session.start", `Tokenomy ${packageVersion()} session started`, {
-      version: packageVersion(),
-      provider: config.provider,
-      baselineModel,
-      cwd: ctx.cwd,
-      rawCapture: true,
-      warning: "Debug trace contains raw session data.",
-      config: {
-        enabled: config.enabled,
-        models: config.models,
-        classifier: config.classifier,
-        telemetry: config.telemetry,
-        memory: config.memory,
-        adaptive: config.adaptive,
-        routing: config.routing,
-        debug: config.debug,
-        promptSimplification: config.promptSimplification,
-      },
-    });
+    traceEvent(
+      debugTrace,
+      "session.start",
+      `Tokenomy ${packageVersion()} session started`,
+      debugSessionSnapshot(ctx, config, baselineModel, lastDecision),
+    );
     statsWarning = undefined;
     try {
       stats = loadStats(ctx.cwd);
@@ -3060,12 +3109,13 @@ export default function tokenomy(pi: ExtensionAPI) {
     }
     const usage = ctx.getContextUsage();
     const imageCount = event.images?.length ?? 0;
-    const analysis = analyzePrompt(
+    let analysis = analyzePrompt(
       event.text,
       usage?.tokens,
       imageCount,
       config,
     );
+    analysis = applyContinuationContext(analysis, event.text, lastDecision);
     traceEvent(debugTrace, "analysis.input", `toolProfile=${analysis.toolProfile}`, {
       analysis,
       contextTokens: usage?.tokens,
@@ -3094,12 +3144,13 @@ export default function tokenomy(pi: ExtensionAPI) {
     const usage = ctx.getContextUsage();
     const contextTokens = usage?.tokens;
     const imageCount = event.images?.length ?? 0;
-    const analysis = analyzePrompt(
+    let analysis = analyzePrompt(
       event.prompt,
       contextTokens,
       imageCount,
       config,
     );
+    analysis = applyContinuationContext(analysis, event.prompt, lastDecision);
     traceEvent(
       debugTrace,
       "analysis.local",
@@ -3493,7 +3544,7 @@ export default function tokenomy(pi: ExtensionAPI) {
         config.debug.trace = true;
         debugTrace = startDebugTrace(ctx.cwd);
         traceEvent(debugTrace, "debug.enabled", "debug trace enabled by command", {
-          warning: "Debug trace contains raw session data.",
+          ...debugSessionSnapshot(ctx, config, baselineModel, lastDecision),
         });
         ctx.ui.notify(debugWarningMessage(debugTrace.path), "warning");
         return;

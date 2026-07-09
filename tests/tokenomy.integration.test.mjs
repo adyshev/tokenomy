@@ -816,6 +816,26 @@ test("routes state-changing local workflows to medium locally", async () => {
   );
 });
 
+test("preserves prior route context for short continuation prompts", async () => {
+  const harness = createHarness(createProjectConfig(), {
+    contextTokens: 130_000,
+  });
+  await startSession(harness);
+
+  await routePrompt(harness, "works, please commit/push");
+  await routePrompt(harness, "continue");
+
+  assert.equal(harness.selectedModels.at(-1), "openai-codex/gpt-5.5");
+  assert.equal(harness.thinkingLevels.at(-1), "medium");
+  assert.match(
+    harness.notifications.at(-1).message,
+    /Tokenomy: complex via local -> openai-codex\/gpt-5\.5, thinking:medium/,
+  );
+  await runTokenomyCommand(harness, "explain");
+  assert.match(harness.notifications.at(-1).message, /contextual-continuation/);
+  assert.match(harness.notifications.at(-1).message, /previous-tier:complex/);
+});
+
 test("does not write a Tokenomy footer or disturb other plugin status entries", async () => {
   const harness = createHarness(createProjectConfig());
   harness.statuses.set(
@@ -1499,6 +1519,13 @@ test("writes opt-in debug trace entries with raw session data", async () => {
   const traceText = entries.map((entry) => JSON.stringify(entry)).join("\n");
   assert.match(traceText, /raw-prompt-123/);
   assert.match(traceText, /raw output marker 456/);
+
+  const savedStats = JSON.parse(
+    readFileSync(join(cwd, ".pi/tokenomy-stats.json"), "utf8"),
+  );
+  const tracedStats = entries.find((entry) => entry.event === "telemetry.saved")
+    .data.stats;
+  assert.equal(tracedStats.updatedAt, savedStats.updatedAt);
 });
 
 test("can enable, inspect, and disable debug trace by command", async () => {
@@ -1512,8 +1539,14 @@ test("can enable, inspect, and disable debug trace by command", async () => {
     harness.notifications.at(-1).message,
     /Tokenomy debug trace is ENABLED/,
   );
-  await routePrompt(harness, "What time is it? raw-command-debug-789");
   let entries = readDebugEntries(cwd);
+  const enabled = entries.find((entry) => entry.event === "debug.enabled");
+  assert.equal(enabled.data.version, PACKAGE_VERSION);
+  assert.equal(enabled.data.cwd, cwd);
+  assert.equal(enabled.data.config.enabled, true);
+
+  await routePrompt(harness, "What time is it? raw-command-debug-789");
+  entries = readDebugEntries(cwd);
   assert.match(
     entries.map((entry) => JSON.stringify(entry)).join("\n"),
     /raw-command-debug-789/,
