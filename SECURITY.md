@@ -30,6 +30,13 @@ estimated token savings. For live classifier calls, it also includes
 compression guard status and counts, but not the protected signal line text. It
 does not store raw prompt text or model responses.
 
+Telemetry rollups are stored in `.pi/tokenomy-cache/telemetry-rollups.json`.
+They aggregate daily, monthly, and lifetime counters such as estimated baseline
+cost units, estimated routed cost units, estimated savings, route distribution,
+classifier cache hits, memory savings estimates, compression savings estimates,
+adaptive fallbacks, and compression guard rejections. Rollups do not store raw
+prompt text, prompt hashes, model responses, API keys, or auth headers.
+
 Tokenomy does not store raw prompt text, model responses, API keys, or auth
 headers.
 

@@ -44,6 +44,8 @@ likely to cost more through retries, excessive tool calls, or incorrect edits.
 - Rejects compression when protected signal lines would be rewritten or dropped.
 - Tracks local telemetry for routing decisions, estimated savings, memory use,
   and compression guard activity.
+- Builds daily, monthly, and lifetime telemetry rollups so savings claims can
+  be checked from local data instead of guesswork.
 
 Tokenomy does not rewrite the final prompt sent to the selected agent model.
 Memory and compression are routing/context optimizations only, and the current
@@ -116,6 +118,11 @@ Useful commands inside Pi:
 /tokenomy reload
 /tokenomy explain
 /tokenomy history
+/tokenomy report
+/tokenomy report 7d
+/tokenomy report 30d
+/tokenomy report month
+/tokenomy report lifetime
 /tokenomy memory
 /tokenomy memory show
 /tokenomy memory refresh
@@ -123,6 +130,7 @@ Useful commands inside Pi:
 /tokenomy memory on
 /tokenomy memory off
 /tokenomy export-history
+/tokenomy export-report
 /tokenomy reset-history
 /tokenomy reset-stats
 /tokenomy dry-run on
@@ -132,9 +140,12 @@ Useful commands inside Pi:
 `/tokenomy status` shows the current routing state, last decision, and estimated tokens saved vs not using Tokenomy.
 `/tokenomy explain` shows the signals and reason for the last routing decision.
 `/tokenomy history` shows recent prompt-safe routing telemetry.
+`/tokenomy report` shows a 30-day local telemetry report with estimated savings percentage, route distribution, memory/cache/compression contribution, and fallback/guard counts.
+Use `/tokenomy report 7d`, `/tokenomy report 30d`, `/tokenomy report month`, or `/tokenomy report lifetime` for specific periods.
 `/tokenomy memory` shows local project memory status.
 `/tokenomy memory show` shows stored project facts.
 `/tokenomy export-history` shows the local routing history file path.
+`/tokenomy export-report` shows the local telemetry rollup file path.
 `/tokenomy reset-stats` clears local lifetime counters.
 `/tokenomy reset-history` clears local routing history.
 
@@ -265,6 +276,13 @@ Recent routing decisions are stored locally in
 `.pi/tokenomy-cache/routing-history.json` when telemetry is enabled. Telemetry
 stores prompt hashes, routing metadata, compression guard status, and estimated
 savings, not raw prompt text.
+Longer-term telemetry is stored in
+`.pi/tokenomy-cache/telemetry-rollups.json` as daily, monthly, and lifetime
+prompt-safe aggregates. Rollups include estimated baseline cost units,
+estimated routed cost units, estimated savings, route distribution, classifier
+cache hits, memory savings estimates, compression savings estimates, adaptive
+fallbacks, and compression guard rejections. These rollups are the main local
+evidence source for checking whether Tokenomy is saving tokens over time.
 
 ## Configuration
 

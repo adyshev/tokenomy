@@ -1,6 +1,12 @@
 # Changelog
 
 ## Unreleased
+- Added durable local telemetry rollups with daily, monthly, and lifetime
+  prompt-safe aggregates for estimated savings, route distribution, memory,
+  compression, cache, fallback, and guard activity.
+- Added `/tokenomy report`, period-specific report commands, and
+  `/tokenomy export-report` for local evidence of Tokenomy efficiency over
+  time.
 
 ## 0.1.19-beta - 2026-07-08
 - Kept trivial general prompts and single-command local info questions such as

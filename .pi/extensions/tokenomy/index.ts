@@ -55,6 +55,7 @@ interface TokenomyConfig {
   telemetry: {
     enabled: boolean;
     maxEntries: number;
+    rollupRetentionDays: number;
   };
   memory: {
     enabled: boolean;
@@ -225,6 +226,33 @@ interface RoutingHistory {
   entries: RoutingHistoryEntry[];
 }
 
+interface TelemetryRollupBucket {
+  prompts: number;
+  estimatedTokensSaved: number;
+  baselineCostUnits: number;
+  actualCostUnits: number;
+  classifierTokens: number;
+  memoryEstimatedTokensSaved: number;
+  compressionTokensSaved: number;
+  compressionGuardRejections: number;
+  memoryInjections: number;
+  adaptiveFallbacks: number;
+  classifierCacheHits: number;
+  tiers: Record<string, number>;
+  sources: Record<string, number>;
+  intents: Record<string, number>;
+  risks: Record<string, number>;
+  models: Record<string, number>;
+}
+
+interface TelemetryRollups {
+  version: 1;
+  updatedAt: string;
+  lifetime: TelemetryRollupBucket;
+  daily: Record<string, TelemetryRollupBucket>;
+  monthly: Record<string, TelemetryRollupBucket>;
+}
+
 interface ClassifierPromptTelemetry {
   attempted: boolean;
   accepted: boolean;
@@ -310,6 +338,7 @@ const DEFAULT_CONFIG: TokenomyConfig = {
   telemetry: {
     enabled: true,
     maxEntries: 200,
+    rollupRetentionDays: 400,
   },
   memory: {
     enabled: true,
@@ -442,6 +471,10 @@ function routingHistoryPath(cwd: string): string {
   return join(cacheDir(cwd), "routing-history.json");
 }
 
+function telemetryRollupsPath(cwd: string): string {
+  return join(cacheDir(cwd), "telemetry-rollups.json");
+}
+
 function projectMemoryPath(cwd: string): string {
   return join(cacheDir(cwd), "project-memory.json");
 }
@@ -539,6 +572,125 @@ function saveRoutingHistory(
   mkdirSync(dirname(path), { recursive: true });
   const entries = history.entries.slice(0, config.telemetry.maxEntries);
   writeFileSync(path, `${JSON.stringify({ entries }, null, 2)}\n`, "utf8");
+}
+
+function emptyRollupBucket(): TelemetryRollupBucket {
+  return {
+    prompts: 0,
+    estimatedTokensSaved: 0,
+    baselineCostUnits: 0,
+    actualCostUnits: 0,
+    classifierTokens: 0,
+    memoryEstimatedTokensSaved: 0,
+    compressionTokensSaved: 0,
+    compressionGuardRejections: 0,
+    memoryInjections: 0,
+    adaptiveFallbacks: 0,
+    classifierCacheHits: 0,
+    tiers: {},
+    sources: {},
+    intents: {},
+    risks: {},
+    models: {},
+  };
+}
+
+function emptyRollups(): TelemetryRollups {
+  return {
+    version: 1,
+    updatedAt: "",
+    lifetime: emptyRollupBucket(),
+    daily: {},
+    monthly: {},
+  };
+}
+
+function safeNumberMap(value: unknown): Record<string, number> {
+  const output: Record<string, number> = {};
+  if (!isObject(value)) return output;
+  for (const [key, count] of Object.entries(value)) {
+    output[key] = safeInt(count);
+  }
+  return output;
+}
+
+function loadRollupBucket(value: unknown): TelemetryRollupBucket {
+  if (!isObject(value)) return emptyRollupBucket();
+  return {
+    prompts: safeInt(value.prompts),
+    estimatedTokensSaved: safeInt(value.estimatedTokensSaved),
+    baselineCostUnits: safeInt(value.baselineCostUnits),
+    actualCostUnits: safeInt(value.actualCostUnits),
+    classifierTokens: safeInt(value.classifierTokens),
+    memoryEstimatedTokensSaved: safeInt(value.memoryEstimatedTokensSaved),
+    compressionTokensSaved: safeInt(value.compressionTokensSaved),
+    compressionGuardRejections: safeInt(value.compressionGuardRejections),
+    memoryInjections: safeInt(value.memoryInjections),
+    adaptiveFallbacks: safeInt(value.adaptiveFallbacks),
+    classifierCacheHits: safeInt(value.classifierCacheHits),
+    tiers: safeNumberMap(value.tiers),
+    sources: safeNumberMap(value.sources),
+    intents: safeNumberMap(value.intents),
+    risks: safeNumberMap(value.risks),
+    models: safeNumberMap(value.models),
+  };
+}
+
+function loadRollupBuckets(value: unknown): Record<string, TelemetryRollupBucket> {
+  const output: Record<string, TelemetryRollupBucket> = {};
+  if (!isObject(value)) return output;
+  for (const [key, bucket] of Object.entries(value)) {
+    output[key] = loadRollupBucket(bucket);
+  }
+  return output;
+}
+
+function loadTelemetryRollups(cwd: string): TelemetryRollups {
+  const parsed = loadJson(telemetryRollupsPath(cwd));
+  if (!isObject(parsed)) return emptyRollups();
+  return {
+    version: 1,
+    updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : "",
+    lifetime: loadRollupBucket(parsed.lifetime),
+    daily: loadRollupBuckets(parsed.daily),
+    monthly: loadRollupBuckets(parsed.monthly),
+  };
+}
+
+function saveTelemetryRollups(
+  cwd: string,
+  rollups: TelemetryRollups,
+  config: TokenomyConfig,
+): void {
+  const path = telemetryRollupsPath(cwd);
+  const now = new Date();
+  const retentionDays =
+    typeof config.telemetry.rollupRetentionDays === "number" &&
+    config.telemetry.rollupRetentionDays >= 30
+      ? config.telemetry.rollupRetentionDays
+      : DEFAULT_CONFIG.telemetry.rollupRetentionDays;
+  const cutoff = new Date(
+    now.getTime() - retentionDays * 24 * 60 * 60 * 1000,
+  )
+    .toISOString()
+    .slice(0, 10);
+  const daily = Object.fromEntries(
+    Object.entries(rollups.daily)
+      .filter(([day]) => day >= cutoff)
+      .sort(([a], [b]) => b.localeCompare(a)),
+  );
+  const monthly = Object.fromEntries(
+    Object.entries(rollups.monthly).sort(([a], [b]) => b.localeCompare(a)),
+  );
+  const next: TelemetryRollups = {
+    version: 1,
+    updatedAt: now.toISOString(),
+    lifetime: rollups.lifetime,
+    daily,
+    monthly,
+  };
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`, "utf8");
 }
 
 function loadProjectMemory(cwd: string): ProjectMemory {
@@ -1006,6 +1158,12 @@ function validateConfig(config: TokenomyConfig): string[] {
     config.telemetry.maxEntries < 1
   ) {
     warnings.push("telemetry.maxEntries must be at least 1");
+  }
+  if (
+    typeof config.telemetry.rollupRetentionDays !== "number" ||
+    config.telemetry.rollupRetentionDays < 30
+  ) {
+    warnings.push("telemetry.rollupRetentionDays must be at least 30");
   }
   if (typeof config.memory.enabled !== "boolean") {
     warnings.push("memory.enabled must be a boolean");
@@ -1931,6 +2089,90 @@ function recordRoutingHistory(
   saveRoutingHistory(cwd, { entries: [entry, ...history.entries] }, config);
 }
 
+function incrementCounter(map: Record<string, number>, key: string | undefined): void {
+  const safeKey = key && key.trim() ? key : "unknown";
+  map[safeKey] = (map[safeKey] ?? 0) + 1;
+}
+
+function addRollupSample(
+  bucket: TelemetryRollupBucket,
+  analysis: LocalAnalysis,
+  decision: RouterDecision,
+  baselineCostUnits: number,
+  actualCostUnits: number,
+  promptSavings: number,
+  classifierPromptTelemetry: ClassifierPromptTelemetry | undefined,
+  memoryInjection: MemoryInjection | undefined,
+): void {
+  bucket.prompts += 1;
+  bucket.estimatedTokensSaved += Math.max(0, Math.round(promptSavings));
+  bucket.baselineCostUnits += Math.max(0, Math.round(baselineCostUnits));
+  bucket.actualCostUnits += Math.max(0, Math.round(actualCostUnits));
+  bucket.classifierTokens += classifierPromptTelemetry?.attempted
+    ? Math.max(0, Math.round(analysis.estimatedClassifierTokens))
+    : 0;
+  bucket.memoryEstimatedTokensSaved += Math.max(
+    0,
+    Math.round(memoryInjection?.estimatedTokensSaved ?? 0),
+  );
+  bucket.compressionTokensSaved += Math.max(
+    0,
+    Math.round(
+      classifierPromptTelemetry?.accepted
+        ? classifierPromptTelemetry.tokensSaved
+        : 0,
+    ),
+  );
+  if (classifierPromptTelemetry?.guarded) bucket.compressionGuardRejections += 1;
+  if (memoryInjection) bucket.memoryInjections += 1;
+  if (decision.source === "fallback" && decision.tier !== "simple") {
+    bucket.adaptiveFallbacks += 1;
+  }
+  if (decision.source === "classifier-cache") bucket.classifierCacheHits += 1;
+  incrementCounter(bucket.tiers, decision.tier);
+  incrementCounter(bucket.sources, decision.source);
+  incrementCounter(bucket.intents, analysis.intent);
+  incrementCounter(bucket.risks, analysis.risk);
+  incrementCounter(bucket.models, decision.model);
+}
+
+function recordTelemetryRollup(
+  cwd: string,
+  analysis: LocalAnalysis,
+  decision: RouterDecision,
+  baselineCostUnits: number,
+  actualCostUnits: number,
+  promptSavings: number,
+  classifierPromptTelemetry: ClassifierPromptTelemetry | undefined,
+  memoryInjection: MemoryInjection | undefined,
+  config: TokenomyConfig,
+): void {
+  if (!config.telemetry.enabled) return;
+  const now = new Date().toISOString();
+  const day = now.slice(0, 10);
+  const month = now.slice(0, 7);
+  const rollups = loadTelemetryRollups(cwd);
+  rollups.daily[day] ??= emptyRollupBucket();
+  rollups.monthly[month] ??= emptyRollupBucket();
+  for (const bucket of [
+    rollups.lifetime,
+    rollups.daily[day],
+    rollups.monthly[month],
+  ]) {
+    addRollupSample(
+      bucket,
+      analysis,
+      decision,
+      baselineCostUnits,
+      actualCostUnits,
+      promptSavings,
+      classifierPromptTelemetry,
+      memoryInjection,
+    );
+  }
+  saveTelemetryRollups(cwd, rollups, config);
+}
+
 function shouldUseProjectDigest(
   digest: ProjectDigest | undefined,
   analysis: LocalAnalysis,
@@ -2218,6 +2460,139 @@ function formatRoutingHistoryEntry(entry: RoutingHistoryEntry): string {
   ].join(" | ");
 }
 
+function mergeRollupBucket(
+  target: TelemetryRollupBucket,
+  source: TelemetryRollupBucket | undefined,
+): void {
+  if (!source) return;
+  target.prompts += source.prompts;
+  target.estimatedTokensSaved += source.estimatedTokensSaved;
+  target.baselineCostUnits += source.baselineCostUnits;
+  target.actualCostUnits += source.actualCostUnits;
+  target.classifierTokens += source.classifierTokens;
+  target.memoryEstimatedTokensSaved += source.memoryEstimatedTokensSaved;
+  target.compressionTokensSaved += source.compressionTokensSaved;
+  target.compressionGuardRejections += source.compressionGuardRejections;
+  target.memoryInjections += source.memoryInjections;
+  target.adaptiveFallbacks += source.adaptiveFallbacks;
+  target.classifierCacheHits += source.classifierCacheHits;
+  for (const [key, value] of Object.entries(source.tiers)) {
+    target.tiers[key] = (target.tiers[key] ?? 0) + value;
+  }
+  for (const [key, value] of Object.entries(source.sources)) {
+    target.sources[key] = (target.sources[key] ?? 0) + value;
+  }
+  for (const [key, value] of Object.entries(source.intents)) {
+    target.intents[key] = (target.intents[key] ?? 0) + value;
+  }
+  for (const [key, value] of Object.entries(source.risks)) {
+    target.risks[key] = (target.risks[key] ?? 0) + value;
+  }
+  for (const [key, value] of Object.entries(source.models)) {
+    target.models[key] = (target.models[key] ?? 0) + value;
+  }
+}
+
+function dayKey(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+function rollupForRecentDays(
+  rollups: TelemetryRollups,
+  days: number,
+): TelemetryRollupBucket {
+  const bucket = emptyRollupBucket();
+  const now = new Date();
+  for (let offset = 0; offset < days; offset += 1) {
+    const day = new Date(now.getTime() - offset * 24 * 60 * 60 * 1000);
+    mergeRollupBucket(bucket, rollups.daily[dayKey(day)]);
+  }
+  return bucket;
+}
+
+function topCounters(
+  label: string,
+  counters: Record<string, number>,
+  limit = 4,
+): string {
+  const values = Object.entries(counters)
+    .sort(([, a], [, b]) => b - a)
+    .slice(0, limit)
+    .map(([key, value]) => `${key}:${value}`);
+  return `${label}: ${values.length ? values.join(", ") : "none"}`;
+}
+
+function savingsPercent(bucket: TelemetryRollupBucket): string {
+  if (bucket.baselineCostUnits <= 0) return "n/a";
+  return `${Math.round((bucket.estimatedTokensSaved / bucket.baselineCostUnits) * 100)}%`;
+}
+
+function formatTelemetryReport(
+  cwd: string,
+  label: string,
+  bucket: TelemetryRollupBucket,
+  rollups: TelemetryRollups,
+): string {
+  return [
+    `Tokenomy telemetry report (${label})`,
+    `Prompts routed: ${bucket.prompts}`,
+    `Estimated savings: ${bucket.estimatedTokensSaved} token-equivalent units (${savingsPercent(bucket)})`,
+    `Estimated baseline cost units: ${bucket.baselineCostUnits}`,
+    `Estimated routed cost units: ${bucket.actualCostUnits}`,
+    `Classifier tokens estimated: ${bucket.classifierTokens}`,
+    `Memory savings estimate: ${bucket.memoryEstimatedTokensSaved}`,
+    `Compression savings estimate: ${bucket.compressionTokensSaved}`,
+    `Memory injections: ${bucket.memoryInjections}`,
+    `Classifier cache hits: ${bucket.classifierCacheHits}`,
+    `Adaptive fallbacks: ${bucket.adaptiveFallbacks}`,
+    `Compression guard rejections: ${bucket.compressionGuardRejections}`,
+    topCounters("Tiers", bucket.tiers),
+    topCounters("Sources", bucket.sources),
+    topCounters("Intents", bucket.intents),
+    topCounters("Models", bucket.models, 3),
+    `Rollup updated: ${rollups.updatedAt || "never"}`,
+    `Rollup file: ${telemetryRollupsPath(cwd)}`,
+  ].join("\n");
+}
+
+function telemetryReportForAction(
+  cwd: string,
+  action: string,
+): { label: string; bucket: TelemetryRollupBucket; rollups: TelemetryRollups } {
+  const rollups = loadTelemetryRollups(cwd);
+  const period = action.replace(/^report\s*/, "").trim() || "30d";
+  if (period === "7d" || period === "week") {
+    return {
+      label: "last 7 days",
+      bucket: rollupForRecentDays(rollups, 7),
+      rollups,
+    };
+  }
+  if (period === "30d") {
+    return {
+      label: "last 30 days",
+      bucket: rollupForRecentDays(rollups, 30),
+      rollups,
+    };
+  }
+  if (period === "month" || period === "current-month") {
+    const month = new Date().toISOString().slice(0, 7);
+    return {
+      label: month,
+      bucket: rollups.monthly[month] ?? emptyRollupBucket(),
+      rollups,
+    };
+  }
+  if (period === "lifetime" || period === "all") {
+    return { label: "lifetime", bucket: rollups.lifetime, rollups };
+  }
+  return {
+    label: "last 30 days",
+    bucket: rollupForRecentDays(rollups, 30),
+    rollups,
+  };
+}
+
 function memorySummary(memory: ProjectMemory | undefined, config: TokenomyConfig): string {
   const facts = memory?.facts ?? [];
   const stale = facts.filter((fact) => factIsStale(fact, config)).length;
@@ -2439,10 +2814,14 @@ export default function tokenomy(pi: ExtensionAPI) {
       ? modelFamilyRank(baselineModel.split("/").pop() ?? baselineModel)
       : 0;
     const targetScore = target ? modelFamilyRank(target.id) : baselineScore;
+    const costChunks = Math.max(
+      1,
+      Math.ceil((contextTokens ?? event.prompt.length) / 4000),
+    );
+    const baselineCostUnits = baselineScore * costChunks * 50;
+    const actualCostUnits = targetScore * costChunks * 50;
     const promptSavings =
-      Math.max(0, baselineScore - targetScore) *
-      Math.ceil((contextTokens ?? event.prompt.length) / 4000) *
-      50;
+      Math.max(0, baselineCostUnits - actualCostUnits);
     estimatedTokensSaved += promptSavings;
     const memory = safeLoadProjectMemory(ctx.cwd);
     const memoryInjection = buildMemoryInjection(
@@ -2491,10 +2870,21 @@ export default function tokenomy(pi: ExtensionAPI) {
           memoryInjection,
           config,
         );
+        recordTelemetryRollup(
+          ctx.cwd,
+          analysis,
+          decision,
+          baselineCostUnits,
+          actualCostUnits,
+          promptSavings,
+          classifierPromptTelemetry,
+          memoryInjection,
+          config,
+        );
         markMemoryFactsUsed(ctx.cwd, memory, memoryInjection);
         statsWarning = undefined;
       } catch (error) {
-        statsWarning = `failed to save Tokenomy stats/history: ${error instanceof Error ? error.message : String(error)}`;
+        statsWarning = `failed to save Tokenomy stats/history/rollups: ${error instanceof Error ? error.message : String(error)}`;
         if (ctx.hasUI) {
           ctx.ui.notify(`Tokenomy stats warning: ${statsWarning}`, "warning");
         }
@@ -2531,7 +2921,7 @@ export default function tokenomy(pi: ExtensionAPI) {
 
   pi.registerCommand("tokenomy", {
     description:
-      "Show or change Tokenomy token-router status: /tokenomy [on|off|reload|status|explain|history|memory|export-history|reset-history|reset-stats|dry-run on|dry-run off]",
+      "Show or change Tokenomy token-router status: /tokenomy [on|off|reload|status|explain|history|report|memory|export-history|export-report|reset-history|reset-stats|dry-run on|dry-run off]",
     handler: async (args, ctx) => {
       const action = args.trim().toLowerCase() || "status";
       if (action === "on") {
@@ -2567,11 +2957,27 @@ export default function tokenomy(pi: ExtensionAPI) {
         estimatedTokensSaved = 0;
         try {
           saveStats(ctx.cwd, stats);
+          saveTelemetryRollups(ctx.cwd, emptyRollups(), config);
           statsWarning = undefined;
           ctx.ui.notify("Tokenomy stats reset", "info");
         } catch (error) {
           statsWarning = `failed to reset Tokenomy stats: ${error instanceof Error ? error.message : String(error)}`;
           ctx.ui.notify(`Tokenomy stats warning: ${statsWarning}`, "warning");
+        }
+        return;
+      }
+      if (action === "report" || action.startsWith("report ")) {
+        try {
+          const report = telemetryReportForAction(ctx.cwd, action);
+          ctx.ui.notify(
+            formatTelemetryReport(ctx.cwd, report.label, report.bucket, report.rollups),
+            "info",
+          );
+        } catch (error) {
+          ctx.ui.notify(
+            `Tokenomy report warning: failed to load telemetry rollups: ${error instanceof Error ? error.message : String(error)}`,
+            "warning",
+          );
         }
         return;
       }
@@ -2598,6 +3004,13 @@ export default function tokenomy(pi: ExtensionAPI) {
       if (action === "export-history") {
         ctx.ui.notify(
           `Tokenomy routing history file: ${routingHistoryPath(ctx.cwd)}`,
+          "info",
+        );
+        return;
+      }
+      if (action === "export-report") {
+        ctx.ui.notify(
+          `Tokenomy telemetry rollup file: ${telemetryRollupsPath(ctx.cwd)}`,
           "info",
         );
         return;
@@ -2717,7 +3130,7 @@ export default function tokenomy(pi: ExtensionAPI) {
         `Version: ${packageVersion()}`,
         `Provider: ${config.provider}`,
         `Classifier: ${config.classifier.enabled ? "enabled" : "disabled"} (${config.classifier.onlyWhenAmbiguous ? "ambiguous only" : "all eligible"})`,
-        `Telemetry: ${config.telemetry.enabled ? "enabled" : "disabled"} (${config.telemetry.maxEntries} max entries)`,
+        `Telemetry: ${config.telemetry.enabled ? "enabled" : "disabled"} (${config.telemetry.maxEntries} history entries, ${config.telemetry.rollupRetentionDays} rollup days)`,
         memorySummary(safeLoadProjectMemory(ctx.cwd), config),
         `Prompt simplification: ${config.promptSimplification.enabled ? "enabled" : "disabled"}`,
         `Prompt compression: ${config.promptSimplification.compressionEnabled ? "enabled" : "disabled"}`,
@@ -2736,6 +3149,7 @@ export default function tokenomy(pi: ExtensionAPI) {
         `Cache directory: ${cacheDir(ctx.cwd)}`,
         `Stats file: ${statsPath(ctx.cwd)}`,
         `Routing history file: ${routingHistoryPath(ctx.cwd)}`,
+        `Telemetry rollup file: ${telemetryRollupsPath(ctx.cwd)}`,
         `Memory file: ${projectMemoryPath(ctx.cwd)}`,
         ...(statsWarning ? [`Stats warning: ${statsWarning}`] : []),
         `Config files: ${join(getAgentDir(), "tokenomy.json")} and ${join(ctx.cwd, CONFIG_DIR_NAME, "tokenomy.json")}`,

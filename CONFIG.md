@@ -88,7 +88,8 @@ Neither cache stores model responses, API keys, or auth headers.
 {
   "telemetry": {
     "enabled": true,
-    "maxEntries": 200
+    "maxEntries": 200,
+    "rollupRetentionDays": 400
   }
 }
 ```
@@ -101,6 +102,16 @@ tokens saved. Live classifier calls also record whether classifier prompt
 compression was accepted or rejected by the semantic guard, how many protected
 signal lines triggered the guard, and the attempted compression savings. They
 do not store raw prompt text or model responses.
+
+Durable telemetry rollups are stored in
+`.pi/tokenomy-cache/telemetry-rollups.json`. Rollups are aggregated by day,
+month, and lifetime, so Tokenomy can report savings over time even after recent
+history entries are capped. They include estimated baseline cost units,
+estimated routed cost units, estimated savings, tier/source/intent/model
+distribution, classifier cache hits, memory and compression savings estimates,
+adaptive fallbacks, and compression guard rejections. `rollupRetentionDays`
+controls daily rollup retention and defaults to 400 days; monthly and lifetime
+rollups are retained.
 
 ## Project Memory
 

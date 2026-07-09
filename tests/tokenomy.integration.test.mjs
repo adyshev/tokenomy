@@ -280,6 +280,36 @@ test("records prompt-safe routing history", async () => {
   assert.match(harness.notifications.at(-1).message, /Tokenomy routing history/);
   assert.match(harness.notifications.at(-1).message, /simple\/fallback/);
 
+  const rollups = JSON.parse(
+    readFileSync(
+      join(harness.ctx.cwd, ".pi/tokenomy-cache/telemetry-rollups.json"),
+      "utf8",
+    ),
+  );
+  const today = new Date().toISOString().slice(0, 10);
+  const month = today.slice(0, 7);
+  assert.equal(rollups.lifetime.prompts, 1);
+  assert.equal(rollups.daily[today].prompts, 1);
+  assert.equal(rollups.monthly[month].prompts, 1);
+  assert.ok(rollups.lifetime.baselineCostUnits > 0);
+  assert.ok(rollups.lifetime.actualCostUnits > 0);
+  assert.ok(rollups.lifetime.estimatedTokensSaved > 0);
+  assert.equal(rollups.lifetime.tiers.simple, 1);
+  assert.equal(rollups.lifetime.sources.fallback, 1);
+  assert.equal(rollups.lifetime.models["openai-codex/gpt-5.4-mini"], 1);
+
+  await runTokenomyCommand(harness, "report 30d");
+  assert.match(
+    harness.notifications.at(-1).message,
+    /Tokenomy telemetry report \(last 30 days\)/,
+  );
+  assert.match(harness.notifications.at(-1).message, /Prompts routed: 1/);
+  assert.match(
+    harness.notifications.at(-1).message,
+    /Estimated savings: \d+ token-equivalent units \(\d+%\)/,
+  );
+  assert.match(harness.notifications.at(-1).message, /Tiers: simple:1/);
+
   await runTokenomyCommand(harness, "export-history");
   assert.match(
     harness.notifications.at(-1).message,
@@ -1300,6 +1330,16 @@ test("explains the last decision and resets stats", async () => {
   assert.equal(stats.lifetimeEstimatedTokensSaved, 0);
   assert.equal(stats.routedPrompts, 0);
   assert.equal(stats.sessionsStarted, 0);
+
+  const rollups = JSON.parse(
+    readFileSync(
+      join(harness.ctx.cwd, ".pi/tokenomy-cache/telemetry-rollups.json"),
+      "utf8",
+    ),
+  );
+  assert.equal(rollups.lifetime.prompts, 0);
+  assert.deepEqual(rollups.daily, {});
+  assert.deepEqual(rollups.monthly, {});
 });
 
 test("shows the package version in status output", async () => {
