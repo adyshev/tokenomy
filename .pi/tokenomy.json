@@ -21,7 +21,8 @@
   },
   "telemetry": {
     "enabled": true,
-    "maxEntries": 200
+    "maxEntries": 200,
+    "rollupRetentionDays": 400
   },
   "memory": {
     "enabled": true,
