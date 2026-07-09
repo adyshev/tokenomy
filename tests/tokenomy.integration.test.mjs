@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdtempSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   writeFileSync,
 } from "node:fs";
@@ -175,8 +176,8 @@ async function routePrompt(harness, prompt) {
   );
 }
 
-async function finishAgent(harness, eventName = "after_agent_end") {
-  return harness.handlers.get(eventName)?.({}, harness.ctx);
+async function finishAgent(harness, eventName = "after_agent_end", event = {}) {
+  return harness.handlers.get(eventName)?.(event, harness.ctx);
 }
 
 function inputPrompt(harness, text) {
@@ -191,6 +192,14 @@ function inputPrompt(harness, text) {
 
 async function runTokenomyCommand(harness, args) {
   return harness.commands.get("tokenomy").handler(args, harness.ctx);
+}
+
+function readDebugEntries(cwd) {
+  const dir = join(cwd, ".pi/tokenomy-cache/debug");
+  const file = readdirSync(dir).find((name) => name.endsWith(".jsonl"));
+  assert.ok(file, "expected a debug trace JSONL file");
+  const raw = readFileSync(join(dir, file), "utf8").trim();
+  return raw.split("\n").map((line) => JSON.parse(line));
 }
 
 test("starts on the configured complex baseline model", async () => {
@@ -1440,6 +1449,84 @@ test("shows the package version in status output", async () => {
     harness.notifications.at(-1).message,
     new RegExp(`Version: ${PACKAGE_VERSION}`),
   );
+});
+
+test("keeps debug trace disabled by default", async () => {
+  const cwd = createProjectConfig();
+  const harness = createHarness(cwd);
+  await startSession(harness);
+
+  await routePrompt(harness, "What time is it?");
+
+  assert.equal(existsSync(join(cwd, ".pi/tokenomy-cache/debug")), false);
+  await runTokenomyCommand(harness, "status");
+  assert.match(harness.notifications.at(-1).message, /Debug trace: disabled/);
+});
+
+test("writes opt-in debug trace entries with raw session data", async () => {
+  const cwd = createProjectConfig({
+    debug: {
+      trace: true,
+    },
+  });
+  const harness = createHarness(cwd);
+  await startSession(harness);
+
+  assert.match(
+    harness.notifications.at(-1).message,
+    /Tokenomy debug trace is ENABLED/,
+  );
+
+  await routePrompt(
+    harness,
+    "Please explain Tokenomy debug trace marker raw-prompt-123 in one sentence.",
+  );
+  await finishAgent(harness, "after_agent_end", {
+    output: "raw output marker 456",
+  });
+
+  const entries = readDebugEntries(cwd);
+  const eventNames = entries.map((entry) => entry.event);
+  assert.ok(eventNames.includes("session.start"));
+  assert.ok(eventNames.includes("prompt.received"));
+  assert.ok(eventNames.includes("analysis.local"));
+  assert.ok(eventNames.includes("route.selected"));
+  assert.ok(eventNames.includes("system.additions"));
+  assert.ok(eventNames.includes("agent.output"));
+  assert.ok(entries.every((entry, index) => entry.seq === index + 1));
+  assert.ok(entries.every((entry) => typeof entry.summary === "string"));
+
+  const traceText = entries.map((entry) => JSON.stringify(entry)).join("\n");
+  assert.match(traceText, /raw-prompt-123/);
+  assert.match(traceText, /raw output marker 456/);
+});
+
+test("can enable, inspect, and disable debug trace by command", async () => {
+  const cwd = createProjectConfig();
+  const harness = createHarness(cwd);
+  await startSession(harness);
+
+  await runTokenomyCommand(harness, "debug on");
+
+  assert.match(
+    harness.notifications.at(-1).message,
+    /Tokenomy debug trace is ENABLED/,
+  );
+  await routePrompt(harness, "What time is it? raw-command-debug-789");
+  let entries = readDebugEntries(cwd);
+  assert.match(
+    entries.map((entry) => JSON.stringify(entry)).join("\n"),
+    /raw-command-debug-789/,
+  );
+
+  await runTokenomyCommand(harness, "debug path");
+  assert.match(harness.notifications.at(-1).message, /debug trace: enabled/i);
+  assert.match(harness.notifications.at(-1).message, /session-.*\.jsonl/);
+
+  await runTokenomyCommand(harness, "debug off");
+  assert.match(harness.notifications.at(-1).message, /debug trace disabled/i);
+  entries = readDebugEntries(cwd);
+  assert.equal(entries.at(-1).event, "debug.disabled");
 });
 
 test("adds command output condensation guidance to the system prompt", async () => {

@@ -59,5 +59,10 @@
   "ui": {
     "status": true,
     "notifyDecisions": true
+  },
+  "debug": {
+    "dryRun": false,
+    "trace": false,
+    "verbose": false
   }
 }

@@ -253,6 +253,7 @@ Tokenomy telemetry.
 {
   "debug": {
     "dryRun": false,
+    "trace": false,
     "verbose": false
   }
 }
@@ -260,6 +261,15 @@ Tokenomy telemetry.
 
 `dryRun` reports what Tokenomy would do without changing the model, thinking
 level, or active tools.
+
+`trace` writes a local JSONL debug session trace under
+`.pi/tokenomy-cache/debug/session-*.jsonl`. It is disabled by default because
+it may record raw prompts, model/tool outputs exposed to Tokenomy, classifier
+prompts and responses, memory context, compression data, routing decisions, and
+internal errors. Enable it only when you need to debug Tokenomy behavior and are
+comfortable storing that session data locally. You can also toggle it for the
+current session with `/tokenomy debug on`, `/tokenomy debug off`, and
+`/tokenomy debug path`.
 
 ## Prompt Discipline
 

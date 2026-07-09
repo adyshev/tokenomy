@@ -139,6 +139,9 @@ Useful commands inside Pi:
 /tokenomy reset-stats
 /tokenomy dry-run on
 /tokenomy dry-run off
+/tokenomy debug on
+/tokenomy debug path
+/tokenomy debug off
 ```
 
 `/tokenomy status` shows the current routing state, last decision, and estimated tokens saved vs not using Tokenomy.
@@ -152,6 +155,8 @@ Use `/tokenomy report 7d`, `/tokenomy report 30d`, `/tokenomy report month`, or 
 `/tokenomy export-report` shows the local telemetry rollup file path.
 `/tokenomy reset-stats` clears local lifetime counters.
 `/tokenomy reset-history` clears local routing history.
+`/tokenomy debug on` starts an opt-in raw local JSONL trace for debugging
+Tokenomy decisions, and `/tokenomy debug off` stops it.
 
 Routing decision notifications are enabled by default so you can see when
 Tokenomy switches models. To disable them, set `ui.notifyDecisions` to `false`
@@ -311,6 +316,8 @@ Edit `.pi/tokenomy.json`. See `CONFIG.md` for every option.
 Safer defaults for sharing:
 - `tools.manage` is `false` unless you opt in
 - `debug.dryRun` lets you see routing without changing model/tool state
+- `debug.trace` is disabled by default because it records raw session data for
+  debugging
 - `promptSimplification.enabled` reduces classifier prompt size for large logs
 - `promptSimplification.compressionEnabled` controls local `tokenshrink`
   compression and defaults to `true`
@@ -332,6 +339,28 @@ pi --list-models openai-codex
 ```
 
 Then update `.pi/tokenomy.json`.
+
+## Debug Trace
+
+For difficult routing issues, Tokenomy can write a local session trace that is
+optimized for debugging routing decisions and feature interactions:
+
+```bash
+/tokenomy debug on
+/tokenomy debug path
+/tokenomy debug off
+```
+
+The trace is stored as JSONL in `.pi/tokenomy-cache/debug/session-*.jsonl` and
+includes ordered events with short summaries plus structured data for input
+analysis, classifier prompts/results, routing, memory, telemetry, model
+restoration, and captured agent outputs.
+
+This is intentionally off by default. When enabled, Tokenomy shows a warning
+because the trace may include raw prompts, model/tool outputs exposed to
+Tokenomy, classifier prompts and responses, memory context, compression data,
+routing decisions, and internal errors. Normal telemetry remains prompt-safe;
+debug trace is the explicit opt-in path for full local visibility.
 
 Before public sharing, review `COMPATIBILITY.md`, `LIMITATIONS.md`, and
 `CHANGELOG.md`.

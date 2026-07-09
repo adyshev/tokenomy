@@ -1,5 +1,11 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { complete, type Api, type Model } from "@earendil-works/pi-ai/compat";
 import nlp from "compromise/three";
@@ -95,6 +101,7 @@ interface TokenomyConfig {
   };
   debug: {
     dryRun: boolean;
+    trace: boolean;
     verbose: boolean;
   };
   promptDiscipline: {
@@ -130,6 +137,13 @@ interface PendingModelRestore {
   restoreModel: Model<Api>;
   restoreLabel: string;
   selectedLabel: string;
+}
+
+interface DebugTrace {
+  enabled: boolean;
+  path: string;
+  sessionId: string;
+  seq: number;
 }
 
 interface LocalAnalysis {
@@ -402,6 +416,7 @@ const DEFAULT_CONFIG: TokenomyConfig = {
   },
   debug: {
     dryRun: false,
+    trace: false,
     verbose: false,
   },
   promptDiscipline: {
@@ -479,6 +494,88 @@ function loadJson(path: string): unknown | undefined {
   return JSON.parse(readFileSync(path, "utf8"));
 }
 
+function debugSessionId(): string {
+  return hashText(`${Date.now()}\n${Math.random()}`).slice(0, 8);
+}
+
+function debugTracePath(cwd: string, sessionId: string): string {
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").slice(0, 15);
+  return join(debugTraceDir(cwd), `session-${stamp}-${sessionId}.jsonl`);
+}
+
+function sanitizeForTrace(value: unknown, depth = 0, seen = new WeakSet<object>()): unknown {
+  if (depth > 8) return "[MaxDepth]";
+  if (value instanceof Error) {
+    return { name: value.name, message: value.message, stack: value.stack };
+  }
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+  if (typeof value === "bigint") return value.toString();
+  if (typeof value === "undefined" || typeof value === "function") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeForTrace(item, depth + 1, seen));
+  }
+  if (typeof value === "object") {
+    if (seen.has(value)) return "[Circular]";
+    seen.add(value);
+    const output: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      if (key === "signal") {
+        output[key] = "[AbortSignal]";
+      } else {
+        output[key] = sanitizeForTrace(item, depth + 1, seen);
+      }
+    }
+    return output;
+  }
+  return String(value);
+}
+
+function startDebugTrace(cwd: string): DebugTrace {
+  const sessionId = debugSessionId();
+  const path = debugTracePath(cwd, sessionId);
+  mkdirSync(dirname(path), { recursive: true });
+  return { enabled: true, path, sessionId, seq: 0 };
+}
+
+function traceEvent(
+  trace: DebugTrace | undefined,
+  event: string,
+  summary: string,
+  data: Record<string, unknown> = {},
+): void {
+  if (!trace?.enabled) return;
+  try {
+    const entry = {
+      v: 1,
+      seq: ++trace.seq,
+      ts: new Date().toISOString(),
+      event,
+      summary,
+      data: sanitizeForTrace(data),
+    };
+    appendFileSync(trace.path, `${JSON.stringify(entry)}\n`, "utf8");
+  } catch {
+    // Debug tracing must never break routing.
+  }
+}
+
+function debugWarningMessage(path: string): string {
+  return [
+    "Tokenomy debug trace is ENABLED.",
+    "Raw prompts, model/tool outputs exposed to Tokenomy, classifier prompts/results, memory context, compression data, routing decisions, and internal errors may be recorded locally.",
+    `Trace file: ${path}`,
+  ].join("\n");
+}
+
 function statsPath(cwd: string): string {
   return join(cwd, CONFIG_DIR_NAME, "tokenomy-stats.json");
 }
@@ -501,6 +598,10 @@ function routingHistoryPath(cwd: string): string {
 
 function telemetryRollupsPath(cwd: string): string {
   return join(cacheDir(cwd), "telemetry-rollups.json");
+}
+
+function debugTraceDir(cwd: string): string {
+  return join(cacheDir(cwd), "debug");
 }
 
 function projectMemoryPath(cwd: string): string {
@@ -1305,6 +1406,9 @@ function validateConfig(config: TokenomyConfig): string[] {
       "promptSimplification.minCompressionSavingsTokens must be a non-negative number",
     );
   }
+  if (typeof config.debug.trace !== "boolean") {
+    warnings.push("debug.trace must be a boolean");
+  }
   return warnings;
 }
 
@@ -2013,6 +2117,25 @@ function getText(message: { content?: unknown }): string {
     .join("\n");
 }
 
+function extractEventText(event: unknown): string | undefined {
+  if (typeof event === "string") return event;
+  if (!isObject(event)) return undefined;
+  for (const key of ["output", "response", "result", "text", "message", "content"]) {
+    const value = event[key];
+    if (typeof value === "string") return value;
+    if (Array.isArray(value)) {
+      const text = value
+        .map((part) =>
+          isObject(part) && typeof part.text === "string" ? part.text : "",
+        )
+        .filter(Boolean)
+        .join("\n");
+      if (text) return text;
+    }
+  }
+  return undefined;
+}
+
 function buildClassifierPrompt(
   prompt: string,
   contextTokens: number | undefined,
@@ -2102,6 +2225,8 @@ async function classifyWithCheapModel(
   | {
       result: ClassifierResult | undefined;
       promptTelemetry: ClassifierPromptTelemetry;
+      classifierPromptText: string;
+      classifierResponseText: string;
     }
   | undefined
 > {
@@ -2157,6 +2282,8 @@ async function classifyWithCheapModel(
   return {
     result: parseClassifierResponse(text),
     promptTelemetry: classifierPrompt.telemetry,
+    classifierPromptText: classifierPrompt.text,
+    classifierResponseText: text,
   };
 }
 
@@ -2801,11 +2928,22 @@ async function restoreModelIfPending(
   pendingRestore: PendingModelRestore | undefined,
   pi: ExtensionAPI,
   ctx: ExtensionContext,
+  trace?: DebugTrace,
 ): Promise<undefined> {
   if (!pendingRestore) return undefined;
   const currentLabel = modelLabel(ctx.model);
-  if (currentLabel !== pendingRestore.selectedLabel) return undefined;
-  await pi.setModel(pendingRestore.restoreModel);
+  if (currentLabel !== pendingRestore.selectedLabel) {
+    traceEvent(trace, "model.restore.skipped", "current model changed before restore", {
+      currentLabel,
+      pendingRestore,
+    });
+    return undefined;
+  }
+  const ok = await pi.setModel(pendingRestore.restoreModel);
+  traceEvent(trace, "model.restore.done", ok ? `restored ${pendingRestore.restoreLabel}` : `restore failed ${pendingRestore.restoreLabel}`, {
+    ok,
+    pendingRestore,
+  });
   if (ctx.hasUI) {
     ctx.ui.notify(`Tokenomy restored model -> ${pendingRestore.restoreLabel}`, "info");
   }
@@ -2822,6 +2960,7 @@ export default function tokenomy(pi: ExtensionAPI) {
   let statsWarning: string | undefined;
   let statsSessionRecorded = false;
   let pendingModelRestore: PendingModelRestore | undefined;
+  let debugTrace: DebugTrace | undefined;
 
   pi.registerFlag("tokenomy-off", {
     description: "Disable the Tokenomy token-saving router for this run",
@@ -2829,10 +2968,16 @@ export default function tokenomy(pi: ExtensionAPI) {
     default: false,
   });
 
-  const restoreAfterAgent = async (_event: unknown, ctx: ExtensionContext) => {
+  const restoreAfterAgent = async (event: unknown, ctx: ExtensionContext) => {
+    const outputText = extractEventText(event);
+    traceEvent(debugTrace, "agent.output", outputText ? "agent output captured" : "agent output unavailable", {
+      rawOutput: outputText,
+      rawEvent: event,
+      outputCaptureAvailable: !!outputText,
+    });
     const pending = pendingModelRestore;
     pendingModelRestore = undefined;
-    await restoreModelIfPending(pending, pi, ctx);
+    await restoreModelIfPending(pending, pi, ctx, debugTrace);
   };
 
   pi.on("after_agent_end", restoreAfterAgent);
@@ -2846,6 +2991,26 @@ export default function tokenomy(pi: ExtensionAPI) {
     if (pi.getFlag("tokenomy-off")) config = { ...config, enabled: false };
     baselineModel = modelLabel(ctx.model);
     pendingModelRestore = undefined;
+    debugTrace = config.debug.trace ? startDebugTrace(ctx.cwd) : undefined;
+    traceEvent(debugTrace, "session.start", `Tokenomy ${packageVersion()} session started`, {
+      version: packageVersion(),
+      provider: config.provider,
+      baselineModel,
+      cwd: ctx.cwd,
+      rawCapture: true,
+      warning: "Debug trace contains raw session data.",
+      config: {
+        enabled: config.enabled,
+        models: config.models,
+        classifier: config.classifier,
+        telemetry: config.telemetry,
+        memory: config.memory,
+        adaptive: config.adaptive,
+        routing: config.routing,
+        debug: config.debug,
+        promptSimplification: config.promptSimplification,
+      },
+    });
     statsWarning = undefined;
     try {
       stats = loadStats(ctx.cwd);
@@ -2874,12 +3039,25 @@ export default function tokenomy(pi: ExtensionAPI) {
     if (statsWarning && ctx.hasUI) {
       ctx.ui.notify(`Tokenomy stats warning: ${statsWarning}`, "warning");
     }
+    if (debugTrace && ctx.hasUI) {
+      ctx.ui.notify(debugWarningMessage(debugTrace.path), "warning");
+    }
   });
 
   pi.on("input", (event, ctx) => {
     if (!config.enabled || event.source === "extension")
       return { action: "continue" as const };
-    if (shouldBypassForLanguage(event.text)) return { action: "continue" as const };
+    traceEvent(debugTrace, "input.received", `input chars=${event.text.length}`, {
+      rawInput: event.text,
+      source: event.source,
+      rawEvent: event,
+    });
+    if (shouldBypassForLanguage(event.text)) {
+      traceEvent(debugTrace, "language.bypass", "input bypassed by language detector", {
+        rawInput: event.text,
+      });
+      return { action: "continue" as const };
+    }
     const usage = ctx.getContextUsage();
     const imageCount = event.images?.length ?? 0;
     const analysis = analyzePrompt(
@@ -2888,13 +3066,28 @@ export default function tokenomy(pi: ExtensionAPI) {
       imageCount,
       config,
     );
+    traceEvent(debugTrace, "analysis.input", `toolProfile=${analysis.toolProfile}`, {
+      analysis,
+      contextTokens: usage?.tokens,
+      imageCount,
+    });
     applyToolPolicy(analysis.toolProfile, config, pi, ctx);
     return { action: "continue" as const };
   });
 
   pi.on("before_agent_start", async (event, ctx) => {
     if (!config.enabled) return;
-    if (shouldBypassForLanguage(event.prompt)) return;
+    traceEvent(debugTrace, "prompt.received", `chars=${event.prompt.length}`, {
+      rawPrompt: event.prompt,
+      rawSystemPrompt: event.systemPrompt,
+      rawEvent: event,
+    });
+    if (shouldBypassForLanguage(event.prompt)) {
+      traceEvent(debugTrace, "language.bypass", "prompt bypassed by language detector", {
+        rawPrompt: event.prompt,
+      });
+      return;
+    }
 
     pendingModelRestore = undefined;
     const modelBeforeRouting = ctx.model;
@@ -2906,6 +3099,24 @@ export default function tokenomy(pi: ExtensionAPI) {
       contextTokens,
       imageCount,
       config,
+    );
+    traceEvent(
+      debugTrace,
+      "analysis.local",
+      `tier=${analysis.tier} intent=${analysis.intent} risk=${analysis.risk} shape=${analysis.promptShape.kind} actions=${analysis.promptShape.actionCount} score=${analysis.score} confidence=${Math.round(analysis.confidence * 100)}%`,
+      {
+        analysis,
+        contextTokens,
+        imageCount,
+        whyNotCheaper:
+          analysis.tier === "simple"
+            ? "already cheapest"
+            : analysis.signals.join(",") || "local heuristic",
+        whyNotStronger:
+          analysis.tier === "complex"
+            ? "already strongest configured tier"
+            : "risk and score did not require stronger tier",
+      },
     );
     let tier = analysis.tier;
     let source: RouterDecision["source"] = "local";
@@ -2921,9 +3132,22 @@ export default function tokenomy(pi: ExtensionAPI) {
       config,
     );
 
-    if (shouldUseClassifier(analysis, event.prompt, config)) {
+    const classifierEligible = shouldUseClassifier(analysis, event.prompt, config);
+    traceEvent(debugTrace, "classifier.eligible", `eligible=${classifierEligible}`, {
+      eligible: classifierEligible,
+      heuristicUncertain,
+      estimatedClassifierTokens: analysis.estimatedClassifierTokens,
+      maxEstimatedClassifierTokens: config.classifier.maxEstimatedClassifierTokens,
+      ambiguous: analysis.ambiguous,
+    });
+
+    if (classifierEligible) {
       try {
         const cached = getClassifierCacheEntry(ctx.cwd, classifierKey, config);
+        traceEvent(debugTrace, "classifier.cache", cached ? "classifier cache hit" : "classifier cache miss", {
+          cacheKey: classifierKey,
+          cached,
+        });
         const liveClassification = cached
           ? undefined
           : await classifyWithCheapModel(
@@ -2934,6 +3158,14 @@ export default function tokenomy(pi: ExtensionAPI) {
             ctx,
           );
         classifierPromptTelemetry = liveClassification?.promptTelemetry;
+        if (liveClassification) {
+          traceEvent(debugTrace, "classifier.response", "classifier response received", {
+            rawClassifierPrompt: liveClassification.classifierPromptText,
+            rawClassifierResponse: liveClassification.classifierResponseText,
+            promptTelemetry: liveClassification.promptTelemetry,
+            parsed: liveClassification.result,
+          });
+        }
         const classified = cached ?? liveClassification?.result;
         if (!cached && classified) {
           putClassifierCacheEntry(
@@ -2954,16 +3186,25 @@ export default function tokenomy(pi: ExtensionAPI) {
           reason = cached ? `cached ${classified.reason}` : classified.reason;
           confidence = classified.confidence;
           if (cached) stats.classifierCacheHits += 1;
+          traceEvent(debugTrace, "classifier.accepted", `tier=${tier} confidence=${Math.round(classified.confidence * 100)}%`, {
+            classified,
+            source,
+          });
         } else {
           source = "fallback";
           reason = classified
             ? `classifier confidence ${Math.round(classified.confidence * 100)}% below ${Math.round(config.classifier.minConfidence * 100)}%`
             : "classifier unavailable";
           confidence = classified?.confidence;
+          traceEvent(debugTrace, "classifier.rejected", reason, {
+            classified,
+            minConfidence: config.classifier.minConfidence,
+          });
         }
       } catch (error) {
         source = "fallback";
         reason = `classifier failed: ${error instanceof Error ? error.message : String(error)}`;
+        traceEvent(debugTrace, "error", "classifier failed", { error });
       }
     } else if (heuristicUncertain) {
       source = "fallback";
@@ -2981,6 +3222,12 @@ export default function tokenomy(pi: ExtensionAPI) {
         fallbackTier === "simple"
           ? reason
           : `${reason}; adaptive ${analysis.risk}-risk fallback to ${fallbackTier}`;
+      traceEvent(debugTrace, "fallback.selected", `fallback=${fallbackTier}`, {
+        fallbackTier,
+        reason,
+        risk: analysis.risk,
+        intent: analysis.intent,
+      });
     } else {
       target = findFirstModel(ctx, config.models[tier], config.provider);
     }
@@ -2990,6 +3237,10 @@ export default function tokenomy(pi: ExtensionAPI) {
         source = "fallback";
         reason = `configured ${tier} model unavailable; fallback to ${target.id}`;
         tier = "simple";
+        traceEvent(debugTrace, "fallback.selected", "configured tier unavailable", {
+          target: modelLabel(target),
+          reason,
+        });
       }
     }
     const thinking = config.thinking[tier];
@@ -3011,6 +3262,11 @@ export default function tokenomy(pi: ExtensionAPI) {
       promptShape: analysis.promptShape,
       thinking,
     };
+    traceEvent(debugTrace, "route.selected", `${tier}/${source} -> ${decision.model ?? "current model"} thinking=${thinking}`, {
+      decision,
+      modelBeforeRouting: modelLabel(modelBeforeRouting),
+      target: target ? modelLabel(target) : undefined,
+    });
 
     let switchedModel = false;
     if (target && !config.debug.dryRun) {
@@ -3019,6 +3275,10 @@ export default function tokenomy(pi: ExtensionAPI) {
       if (!alreadySelected) {
         const ok = await pi.setModel(target);
         switchedModel = ok;
+        traceEvent(debugTrace, "model.set", ok ? `set ${modelLabel(target)}` : `failed ${modelLabel(target)}`, {
+          ok,
+          target: modelLabel(target),
+        });
         if (!ok && ctx.hasUI) {
           ctx.ui.notify(
             `Tokenomy: no auth for ${target.provider}/${target.id}`,
@@ -3048,6 +3308,10 @@ export default function tokenomy(pi: ExtensionAPI) {
         restoreLabel: originalLabel,
         selectedLabel,
       };
+      traceEvent(debugTrace, "model.restore.scheduled", `restore ${originalLabel}`, {
+        restoreLabel: originalLabel,
+        selectedLabel,
+      });
     }
 
     if (!config.debug.dryRun) pi.setThinkingLevel(thinking);
@@ -3066,6 +3330,14 @@ export default function tokenomy(pi: ExtensionAPI) {
     const promptSavings =
       Math.max(0, baselineCostUnits - actualCostUnits);
     estimatedTokensSaved += promptSavings;
+    traceEvent(debugTrace, "counterfactual", `saved=${promptSavings}`, {
+      baselineModel,
+      selectedModel: modelLabel(target),
+      baselineCostUnits,
+      actualCostUnits,
+      promptSavings,
+      sessionEstimatedTokensSaved: estimatedTokensSaved,
+    });
     const memory = safeLoadProjectMemory(ctx.cwd);
     const memoryInjection = buildMemoryInjection(
       memory,
@@ -3083,6 +3355,16 @@ export default function tokenomy(pi: ExtensionAPI) {
     )
       ? buildProjectDigestPrompt(digest!, config)
       : "";
+    traceEvent(debugTrace, "memory.loaded", `memoryFacts=${memory?.facts.length ?? 0} digest=${digestPrompt ? "yes" : "no"}`, {
+      memory,
+      digest,
+      digestPrompt,
+    });
+    if (memoryInjection) {
+      traceEvent(debugTrace, "memory.injected", `reason=${memoryInjection.reason} facts=${memoryInjection.factsUsed}`, {
+        memoryInjection,
+      });
+    }
     if (!config.debug.dryRun) {
       if (!statsSessionRecorded) {
         stats.sessionsStarted += 1;
@@ -3126,8 +3408,14 @@ export default function tokenomy(pi: ExtensionAPI) {
         );
         markMemoryFactsUsed(ctx.cwd, memory, memoryInjection);
         statsWarning = undefined;
+        traceEvent(debugTrace, "telemetry.saved", "stats/history/rollups saved", {
+          stats,
+          routingHistoryPath: routingHistoryPath(ctx.cwd),
+          telemetryRollupsPath: telemetryRollupsPath(ctx.cwd),
+        });
       } catch (error) {
         statsWarning = `failed to save Tokenomy stats/history/rollups: ${error instanceof Error ? error.message : String(error)}`;
+        traceEvent(debugTrace, "error", "failed to save stats/history/rollups", { error });
         if (ctx.hasUI) {
           ctx.ui.notify(`Tokenomy stats warning: ${statsWarning}`, "warning");
         }
@@ -3146,6 +3434,7 @@ export default function tokenomy(pi: ExtensionAPI) {
         updateProjectMemory(ctx.cwd, analysis, decision, config);
       } catch (error) {
         statsWarning = `failed to save Tokenomy project metadata: ${error instanceof Error ? error.message : String(error)}`;
+        traceEvent(debugTrace, "error", "failed to save project metadata", { error });
       }
     }
 
@@ -3156,6 +3445,12 @@ export default function tokenomy(pi: ExtensionAPI) {
       estimatedTokensSaved,
     );
     const additions = [digestPrompt, memoryInjection?.text, discipline].filter(Boolean);
+    traceEvent(debugTrace, "system.additions", `count=${additions.length}`, {
+      rawAdditions: additions,
+      digestPrompt,
+      memoryInjectionText: memoryInjection?.text,
+      discipline,
+    });
     if (!additions.length) return;
     return {
       systemPrompt: `${event.systemPrompt}\n\n${additions.join("\n\n")}`,
@@ -3164,7 +3459,7 @@ export default function tokenomy(pi: ExtensionAPI) {
 
   pi.registerCommand("tokenomy", {
     description:
-      "Show or change Tokenomy token-router status: /tokenomy [on|off|reload|status|explain|history|report|memory|export-history|export-report|reset-history|reset-stats|dry-run on|dry-run off]",
+      "Show or change Tokenomy token-router status: /tokenomy [on|off|reload|status|explain|history|report|memory|debug on|debug off|debug path|export-history|export-report|reset-history|reset-stats|dry-run on|dry-run off]",
     handler: async (args, ctx) => {
       const action = args.trim().toLowerCase() || "status";
       if (action === "on") {
@@ -3190,6 +3485,37 @@ export default function tokenomy(pi: ExtensionAPI) {
       if (action === "dry-run") {
         ctx.ui.notify(
           `Tokenomy dry-run: ${config.debug.dryRun ? "enabled" : "disabled"}`,
+          "info",
+        );
+        return;
+      }
+      if (action === "debug on") {
+        config.debug.trace = true;
+        debugTrace = startDebugTrace(ctx.cwd);
+        traceEvent(debugTrace, "debug.enabled", "debug trace enabled by command", {
+          warning: "Debug trace contains raw session data.",
+        });
+        ctx.ui.notify(debugWarningMessage(debugTrace.path), "warning");
+        return;
+      }
+      if (action === "debug off") {
+        traceEvent(debugTrace, "debug.disabled", "debug trace disabled by command");
+        config.debug.trace = false;
+        const path = debugTrace?.path;
+        debugTrace = undefined;
+        ctx.ui.notify(
+          path
+            ? `Tokenomy debug trace disabled\nTrace file: ${path}`
+            : "Tokenomy debug trace disabled",
+          "info",
+        );
+        return;
+      }
+      if (action === "debug path" || action === "debug") {
+        ctx.ui.notify(
+          debugTrace
+            ? `Tokenomy debug trace: enabled\nTrace file: ${debugTrace.path}`
+            : "Tokenomy debug trace: disabled",
           "info",
         );
         return;
@@ -3379,6 +3705,7 @@ export default function tokenomy(pi: ExtensionAPI) {
         `Prompt simplification: ${config.promptSimplification.enabled ? "enabled" : "disabled"}`,
         `Prompt compression: ${config.promptSimplification.compressionEnabled ? "enabled" : "disabled"}`,
         `Restore model after prompt: ${config.routing.restoreModelAfterPrompt ? "enabled" : "disabled"}`,
+        `Debug trace: ${debugTrace ? `enabled (${debugTrace.path})` : "disabled"}`,
         `Tool management: ${config.tools.manage ? "enabled" : "disabled"}`,
         `Last decision: ${lastDecision ? `${lastDecision.tier} via ${lastDecision.source}, model=${lastDecision.model ?? "none"}, thinking=${lastDecision.thinking}, reason=${lastDecision.reason}` : "none"}`,
         `Estimated tokens saved this session: ${estimatedTokensSaved}`,

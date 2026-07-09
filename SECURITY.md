@@ -39,7 +39,14 @@ multi-step prompt counts, and compression guard rejections. Rollups do not store
 raw prompt text, prompt hashes, model responses, API keys, or auth headers.
 
 Tokenomy does not store raw prompt text, model responses, API keys, or auth
-headers.
+headers during normal operation.
+
+If `debug.trace` is explicitly enabled, Tokenomy writes a local JSONL debug
+trace under `.pi/tokenomy-cache/debug/session-*.jsonl`. This trace may include
+raw prompts, model/tool outputs exposed to Tokenomy, classifier prompts and
+responses, memory context, compression data, routing decisions, and internal
+errors. Tokenomy shows a warning when debug trace starts. Do not enable it in a
+sensitive project unless storing that raw session data locally is acceptable.
 
 Prompt-shape analysis uses the local `compromise` NLP library. It does not send
 prompt text to an external service.
