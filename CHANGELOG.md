@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+
+## 0.1.23-beta - 2026-07-09
 - Preserved the previous routing context for short continuation prompts such
   as `continue`, so follow-up turns do not accidentally downshift mid-task.
 - Added a session/config snapshot when debug tracing is enabled by command and
