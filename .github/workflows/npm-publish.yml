@@ -73,7 +73,14 @@ jobs:
         if: steps.published.outputs.exists == 'false' && steps.npm-token.outputs.configured == 'true'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --access public --provenance --tag "${{ steps.dist-tag.outputs.tag }}"
+        run: |
+          publish_args=(--access public --tag "${{ steps.dist-tag.outputs.tag }}")
+          if [[ -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" && -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]]; then
+            publish_args+=(--provenance)
+          else
+            echo "::warning::GitHub OIDC identity token is unavailable; publishing without npm provenance."
+          fi
+          npm publish "${publish_args[@]}"
 
       - name: Sync default npm dist tag
         if: steps.npm-token.outputs.configured == 'true'
