@@ -211,6 +211,10 @@ directly to the simple tier. If the prompt looks risky or likely to need edits,
 multi-step reasoning, broad code inspection, or careful design work, it routes
 to a stronger tier.
 
+Short follow-up prompts such as `continue`, `go on`, or `proceed` inherit the
+previous routing context in the current session, so Tokenomy does not downshift
+in the middle of an ongoing complex task.
+
 Broad review prompts such as `please do an audit`, `please review`, or
 `please refactor` are treated as deep project work and route to the complex
 tier. Targeted audits, such as focused config or dotfiles checks, can still
@@ -354,7 +358,7 @@ optimized for debugging routing decisions and feature interactions:
 The trace is stored as JSONL in `.pi/tokenomy-cache/debug/session-*.jsonl` and
 includes ordered events with short summaries plus structured data for input
 analysis, classifier prompts/results, routing, memory, telemetry, model
-restoration, and captured agent outputs.
+restoration, captured agent outputs, and the active session/config snapshot.
 
 This is intentionally off by default. When enabled, Tokenomy shows a warning
 because the trace may include raw prompts, model/tool outputs exposed to

@@ -1,6 +1,11 @@
 # Changelog
 
 ## Unreleased
+- Preserved the previous routing context for short continuation prompts such
+  as `continue`, so follow-up turns do not accidentally downshift mid-task.
+- Added a session/config snapshot when debug tracing is enabled by command and
+  made debug telemetry snapshots show the same `updatedAt` value persisted to
+  disk.
 
 ## 0.1.22-beta - 2026-07-09
 - Added opt-in local debug session traces with `/tokenomy debug on`,
