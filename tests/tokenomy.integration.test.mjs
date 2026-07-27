@@ -68,15 +68,35 @@ test("publish workflow verifies npm before creating tag and release", () => {
     "utf8",
   );
   const verify = workflow.indexOf("Verify package is available from npm");
+  const syncLatest = workflow.indexOf(
+    "Sync latest while package is prerelease-only",
+  );
   const tag = workflow.indexOf("Create and push release tag");
   const release = workflow.indexOf("Create or update GitHub Release");
-  assert.ok(verify > 0 && tag > verify && release > tag);
+  assert.ok(
+    verify > 0 &&
+      syncLatest > verify &&
+      tag > syncLatest &&
+      release > tag,
+  );
   assert.match(workflow, /contents: write/);
   assert.match(workflow, /git tag -a "\$tag"/);
   assert.match(workflow, /gh release create/);
   assert.match(workflow, /for attempt in 1 2 3 4 5 6/);
   assert.match(workflow, /prerelease_args\+=\(--prerelease\)/);
-  assert.doesNotMatch(workflow, /Sync default npm dist tag/);
+  assert.match(
+    workflow,
+    /current_latest=".*npm view "\$package@latest" version/,
+  );
+  assert.match(
+    workflow,
+    /\[\[ -n "\$current_latest" && "\$current_latest" != \*-\* \]\]/,
+  );
+  assert.match(workflow, /npm dist-tag add "\$package@\$version" latest/);
+  assert.match(
+    workflow,
+    /test "\$\(npm view "\$package@latest" version\)" = "\$version"/,
+  );
 });
 
 test("economic evaluation is paired, fixed-baseline, and explicitly opt-in", () => {

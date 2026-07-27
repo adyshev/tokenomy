@@ -69,7 +69,11 @@ versions such as `0.1.0-beta` are published with the `beta` dist-tag; stable
 versions are published with `latest`. After npm confirms the exact version, the
 workflow creates and pushes `v<version>` and creates or updates the matching
 GitHub Release with matching channel semantics. Prereleases are marked as
-prereleases and do not move npm `latest`; stable versions update `latest`.
+prereleases. While the project has no stable release, a prerelease also moves
+npm `latest` so pi.dev, `pi install npm:tokenomy-pi`, and normal package updates
+resolve the current supported beta. Once `latest` points to a stable version,
+future prereleases preserve that stable default and update only `beta`. Stable
+versions always update `latest`.
 Registry verification retries propagation before tagging. These steps are
 idempotent for workflow reruns.
 
