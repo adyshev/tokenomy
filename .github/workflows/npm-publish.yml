@@ -119,6 +119,26 @@ jobs:
           test "$actual" = "$expected"
           echo "published=true" >> "$GITHUB_OUTPUT"
 
+      - name: Sync latest while package is prerelease-only
+        if: steps.verify.outputs.published == 'true' && steps.npm-token.outputs.configured == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          package="${{ steps.package.outputs.name }}"
+          version="${{ steps.package.outputs.version }}"
+          if [[ "$version" != *-* ]]; then
+            exit 0
+          fi
+
+          current_latest="$(npm view "$package@latest" version 2>/dev/null || true)"
+          if [[ -n "$current_latest" && "$current_latest" != *-* ]]; then
+            echo "Preserving stable npm latest at $current_latest."
+            exit 0
+          fi
+
+          npm dist-tag add "$package@$version" latest
+          test "$(npm view "$package@latest" version)" = "$version"
+
       - name: Create and push release tag
         if: steps.verify.outputs.published == 'true'
         env:

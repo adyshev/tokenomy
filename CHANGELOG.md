@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0-beta.3 - 2026-07-27
+
+- Kept npm `beta` as the prerelease channel while also moving `latest` to the
+  current prerelease until Tokenomy publishes its first stable version. This
+  keeps pi.dev, unqualified Pi installs, and normal package updates aligned with
+  the supported beta without allowing future betas to replace a stable default.
+- Updated the pinned GitHub installation example to this release.
+
 ## 0.2.0-beta.2 - 2026-07-27
 
 - Made statistics, routing history, and telemetry read-modify-write updates
