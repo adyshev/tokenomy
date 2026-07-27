@@ -13,7 +13,9 @@ Tokenomy currently targets a narrow environment by design.
 - ChatGPT Plus Codex authenticated in Pi (live-tested)
 - Pi `openai-codex` provider
 - Tokenomy is a Pi extension; native OpenAI Codex CLI hooks are not supported
-- Provider-qualified custom tier lists for other Pi providers
+- Linux, macOS, and Windows packed-install smoke tests
+- Provider-qualified custom tier lists for other Pi providers as an
+  experimental, unvalidated configuration surface
 - Default model IDs:
   - `gpt-5.6-sol`
   - `gpt-5.6-terra`
@@ -22,12 +24,15 @@ Tokenomy currently targets a narrow environment by design.
   - `gpt-5.4`
   - `gpt-5.5`
 
-## Expected Compatible, Not Yet Validated
+The authenticated catalog snapshot also tracks `gpt-5.3-codex-spark`, but it is
+not a default tier because Tokenomy has no verified bundled plan-credit rate for
+it.
 
-- ChatGPT Pro with Codex authentication. OpenAI uses the same Codex provider
-  and token-based rate card for Plus and Pro, but Tokenomy has not yet run its
-  live evaluation suite on a Pro account. Pro compatibility is best-effort
-  until that validation is complete.
+## Unsupported or Unvalidated
+
+- ChatGPT Pro is untested and unsupported. No compatibility claim is made.
+- Native OpenAI Codex CLI integration is a separate future project.
+- Non-Codex providers have no shipped presets, rate cards, or live evaluation.
 
 ## Assumptions
 
@@ -69,3 +74,8 @@ Telemetry rollup schema version 3 is backward-loading: v2 route and rollup files
 continue to load. Old savings/cost-unit fields remain legacy proxies. New turns
 use exact provider-reported usage, explicit unavailable status, quality
 evidence, experiment labels, and measured tool/compaction counters.
+
+CI preserves legacy stats and v2 rollups in upgrade fixtures, validates their
+migration to the current schema, typechecks and tests against Pi 0.82.1 plus
+the latest 0.82.x patch, and tests packed installation on Linux, macOS, and
+Windows. New Pi minor lines require an explicit compatibility update.

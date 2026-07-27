@@ -55,12 +55,19 @@ const required = [
   ".pi/extensions/tokenomy/index.ts",
   ".pi/extensions/tokenomy/lib/storage.ts",
   ".pi/extensions/tokenomy/lib/config.ts",
+  ".pi/extensions/tokenomy/lib/config-schema.ts",
+  ".pi/extensions/tokenomy/lib/defaults.ts",
+  ".pi/extensions/tokenomy/lib/budget.ts",
   ".pi/extensions/tokenomy/lib/models.ts",
   ".pi/tokenomy.json",
   ".pi/tokenomy.schema.json",
   "EVALUATION.md",
   "scripts/live-evaluation.mjs",
   "scripts/economic-evaluation.mjs",
+  "scripts/evaluation-core.mjs",
+  "scripts/evaluation-scenarios.mjs",
+  "scripts/catalog-check.mjs",
+  "scripts/generate-config-schema.mjs",
 ];
 for (const path of required) {
   if (!existsSync(join(packageRoot, path))) {

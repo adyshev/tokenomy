@@ -63,28 +63,50 @@ function withFileLock<T>(path: string, operation: () => T): T {
   throw new Error(`timed out waiting for storage lock: ${basename(path)}`);
 }
 
+function writeJsonUnlocked(path: string, value: unknown): void {
+  const temporaryPath = `${path}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    writeFileSync(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, {
+      encoding: "utf8",
+      mode: PRIVATE_FILE_MODE,
+    });
+    renameSync(temporaryPath, path);
+    try {
+      chmodSync(path, PRIVATE_FILE_MODE);
+    } catch {
+      // Best-effort on Windows and non-POSIX filesystems.
+    }
+  } finally {
+    if (existsSync(temporaryPath)) unlinkSync(temporaryPath);
+  }
+}
+
 export function loadJsonFile(path: string): unknown | undefined {
   if (!existsSync(path)) return undefined;
   return JSON.parse(readFileSync(path, "utf8"));
 }
 
 export function atomicWriteJsonFile(path: string, value: unknown): void {
-  withFileLock(path, () => {
-    const temporaryPath = `${path}.tmp-${process.pid}-${Date.now()}`;
-    try {
-      writeFileSync(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, {
-        encoding: "utf8",
-        mode: PRIVATE_FILE_MODE,
-      });
-      renameSync(temporaryPath, path);
+  withFileLock(path, () => writeJsonUnlocked(path, value));
+}
+
+export function updateJsonFile<T>(
+  path: string,
+  fallback: T,
+  update: (current: unknown) => T,
+): T {
+  return withFileLock(path, () => {
+    let current: unknown = fallback;
+    if (existsSync(path)) {
       try {
-        chmodSync(path, PRIVATE_FILE_MODE);
+        current = JSON.parse(readFileSync(path, "utf8"));
       } catch {
-        // Best-effort on Windows and non-POSIX filesystems.
+        current = fallback;
       }
-    } finally {
-      if (existsSync(temporaryPath)) unlinkSync(temporaryPath);
     }
+    const next = update(current);
+    writeJsonUnlocked(path, next);
+    return next;
   });
 }
 
@@ -154,5 +176,40 @@ export function storageHealth(directory: string): {
       ok: false,
       detail: error instanceof Error ? error.message : String(error),
     };
+  }
+}
+
+export function removePrivatePath(path: string): boolean {
+  try {
+    if (!existsSync(path)) return false;
+    rmSync(path, { recursive: true, force: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function privatePathInfo(path: string): {
+  path: string;
+  exists: boolean;
+  bytes: number;
+  updatedAt?: string;
+} {
+  try {
+    const stat = statSync(path);
+    const bytes = stat.isDirectory()
+      ? readdirSync(path).reduce(
+          (total, name) => total + privatePathInfo(join(path, name)).bytes,
+          0,
+        )
+      : stat.size;
+    return {
+      path,
+      exists: true,
+      bytes,
+      updatedAt: stat.mtime.toISOString(),
+    };
+  } catch {
+    return { path, exists: false, bytes: 0 };
   }
 }

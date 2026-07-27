@@ -9,6 +9,18 @@ Tokenomy separates three kinds of evidence:
 Normal CI never consumes ChatGPT quota. The signed-in suites are explicit,
 manual runs.
 
+The economic runner has two profiles:
+
+- `smoke`: five deterministic cases, one repeat by default;
+- `full`: 30 cases across simple answers, focused fixes, and multi-step quality,
+  three repeats by default.
+
+Every candidate arm must meet the configured quality non-inferiority margin
+against the fixed baseline before savings are accepted. The default margin is
+zero. Evidence includes Wilson 95% confidence intervals, classifier-inclusive
+and classifier-disabled arms, all individual runs, and optional changes from a
+previous evidence file.
+
 ## 0.2.0-beta.1 Plus evaluation
 
 Date: 2026-07-27
@@ -81,5 +93,24 @@ TOKENOMY_ECON_EVAL_OUTPUT=/tmp/tokenomy-economic.json \
 npm run test:economic
 ```
 
-Repeat runs and representative real-project fixtures are required before
-removing the beta label.
+Run the repeated corpus, including classifier cost:
+
+```bash
+TOKENOMY_ECON_EVAL=1 \
+TOKENOMY_ECON_PROFILE=full \
+TOKENOMY_ECON_ARMS=baseline,router,full \
+TOKENOMY_ECON_EVAL_OUTPUT=/tmp/tokenomy-economic-full.json \
+npm run test:economic
+```
+
+`TOKENOMY_ECON_REPEATS` overrides repeats.
+`TOKENOMY_ECON_MAX_QUALITY_DROP` sets the permitted success-rate delta (for
+example `0.02`); keep it zero for deterministic fixtures.
+`TOKENOMY_ECON_PREVIOUS` adds trend deltas against earlier version-2 evidence.
+`TOKENOMY_ECON_MANIFEST` accepts a JSON array of scenarios with `id`, `prompt`,
+optional `fixturePath`, and `verify.stdoutRegex`, `verify.command`, or
+`verify.fileRegex`. This allows the same gate to run on representative real
+repositories without committing them to Tokenomy.
+
+Repeated full-profile and representative real-project runs remain required
+before removing the beta label.

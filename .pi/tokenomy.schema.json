@@ -5,83 +5,652 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
-    "enabled": { "type": "boolean" },
-    "mode": { "enum": ["save", "balanced", "quality"] },
-    "provider": { "type": "string", "minLength": 1 },
-    "models": { "$ref": "#/$defs/modelTiers" },
+    "enabled": {
+      "type": "boolean"
+    },
+    "mode": {
+      "enum": [
+        "save",
+        "balanced",
+        "quality"
+      ]
+    },
+    "provider": {
+      "type": "string",
+      "minLength": 1
+    },
+    "models": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "classifier": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "simple": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "medium": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "complex": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        }
+      }
+    },
     "thinking": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "simple": { "$ref": "#/$defs/thinking" },
-        "medium": { "$ref": "#/$defs/thinking" },
-        "complex": { "$ref": "#/$defs/thinking" }
+        "simple": {
+          "enum": [
+            "off",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        },
+        "medium": {
+          "enum": [
+            "off",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        },
+        "complex": {
+          "enum": [
+            "off",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        }
       }
     },
-    "classifier": { "$ref": "#/$defs/object" },
-    "planCredits": { "$ref": "#/$defs/object" },
-    "quality": { "$ref": "#/$defs/object" },
-    "experiments": { "$ref": "#/$defs/object" },
-    "providers": { "$ref": "#/$defs/object" },
-    "registry": { "$ref": "#/$defs/object" },
-    "quota": { "$ref": "#/$defs/object" },
+    "classifier": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "onlyWhenAmbiguous": {
+          "type": "boolean"
+        },
+        "maxPromptChars": {
+          "type": "number",
+          "minimum": 1
+        },
+        "maxEstimatedClassifierTokens": {
+          "type": "number",
+          "minimum": 0
+        },
+        "maxCallsPerSession": {
+          "type": "number",
+          "minimum": 0
+        },
+        "minEstimatedNetCredits": {
+          "type": "number",
+          "minimum": 0
+        },
+        "minConfidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "planCredits": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "rateCardVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rates": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "input": {
+                "type": "number",
+                "minimum": 0
+              },
+              "cacheRead": {
+                "type": "number",
+                "minimum": 0
+              },
+              "output": {
+                "type": "number",
+                "minimum": 0
+              },
+              "cacheWrite": {
+                "type": "number",
+                "minimum": 0
+              }
+            }
+          }
+        }
+      }
+    },
+    "quality": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "correctionDetection": {
+          "type": "boolean"
+        },
+        "evaluatorEnabled": {
+          "type": "boolean"
+        },
+        "evaluatorModels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "evaluatorMaxPromptChars": {
+          "type": "number",
+          "minimum": 1
+        },
+        "evaluatorMaxOutputChars": {
+          "type": "number",
+          "minimum": 1
+        },
+        "minEvaluatorScore": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "experiments": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "sampleRate": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "modes": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "save",
+              "balanced",
+              "quality"
+            ]
+          }
+        }
+      }
+    },
+    "providers": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allowed": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "autoDiscoverModels": {
+          "type": "boolean"
+        }
+      }
+    },
+    "registry": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "rateCardPath": {
+          "type": "string"
+        },
+        "rateCardUrl": {
+          "type": "string"
+        },
+        "refreshHours": {
+          "type": "number",
+          "minimum": 1
+        },
+        "maxAgeDays": {
+          "type": "number",
+          "minimum": 1
+        }
+      }
+    },
+    "quota": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "accountSnapshotPath": {
+          "type": "string"
+        },
+        "staleAfterMinutes": {
+          "type": "number",
+          "minimum": 1
+        }
+      }
+    },
     "budgets": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "sessionCredits": { "type": "number", "minimum": 0 },
-        "dailyCredits": { "type": "number", "minimum": 0 },
-        "warnAtPercent": { "type": "number", "exclusiveMinimum": 0, "maximum": 100 },
-        "policy": { "enum": ["warn", "save", "ask"] }
+        "sessionCredits": {
+          "type": "number",
+          "minimum": 0
+        },
+        "dailyCredits": {
+          "type": "number",
+          "minimum": 0
+        },
+        "warnAtPercent": {
+          "type": "number",
+          "maximum": 100,
+          "exclusiveMinimum": 0
+        },
+        "policy": {
+          "enum": [
+            "warn",
+            "save",
+            "ask"
+          ]
+        },
+        "reserveCredits": {
+          "type": "number",
+          "minimum": 0
+        },
+        "maxDownshiftTiers": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 2
+        },
+        "tierSessionCredits": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "simple": {
+              "type": "number",
+              "minimum": 0
+            },
+            "medium": {
+              "type": "number",
+              "minimum": 0
+            },
+            "complex": {
+              "type": "number",
+              "minimum": 0
+            }
+          }
+        }
       }
     },
-    "cache": { "$ref": "#/$defs/object" },
-    "telemetry": { "$ref": "#/$defs/object" },
-    "contextEconomy": { "$ref": "#/$defs/object" },
-    "memory": { "$ref": "#/$defs/object" },
-    "distillation": { "$ref": "#/$defs/object" },
-    "adaptive": { "$ref": "#/$defs/object" },
-    "routing": { "$ref": "#/$defs/object" },
-    "thresholds": { "$ref": "#/$defs/object" },
-    "tools": { "$ref": "#/$defs/object" },
-    "toolEconomy": { "$ref": "#/$defs/object" },
-    "languages": { "$ref": "#/$defs/object" },
+    "cache": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "classifierTtlMs": {
+          "type": "number",
+          "minimum": 0
+        },
+        "maxClassifierEntries": {
+          "type": "number",
+          "minimum": 1
+        },
+        "projectDigest": {
+          "type": "boolean"
+        }
+      }
+    },
+    "telemetry": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "maxEntries": {
+          "type": "number",
+          "minimum": 1
+        },
+        "rollupRetentionDays": {
+          "type": "number",
+          "minimum": 30
+        }
+      }
+    },
+    "contextEconomy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "autoCompact": {
+          "type": "boolean"
+        },
+        "compactAtPercent": {
+          "type": "number",
+          "minimum": 50,
+          "maximum": 100
+        },
+        "minTokens": {
+          "type": "number",
+          "minimum": 0
+        },
+        "cooldownTurns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "customInstructions": {
+          "type": "string"
+        }
+      }
+    },
+    "memory": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "inject": {
+          "type": "boolean"
+        },
+        "maxFacts": {
+          "type": "number",
+          "minimum": 1
+        },
+        "maxInjectedChars": {
+          "type": "number",
+          "minimum": 200
+        },
+        "maxFactChars": {
+          "type": "number",
+          "minimum": 40
+        },
+        "staleAfterDays": {
+          "type": "number",
+          "minimum": 1
+        },
+        "minContextTokensForInjection": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "distillation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "minContextTokens": {
+          "type": "number",
+          "minimum": 0
+        },
+        "repeatPromptThreshold": {
+          "type": "number",
+          "minimum": 1
+        },
+        "maxDigestChars": {
+          "type": "number",
+          "minimum": 200
+        }
+      }
+    },
+    "adaptive": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "mediumFallbackMinRisk": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ]
+        },
+        "complexFallbackIntents": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "answer",
+              "shell_simple",
+              "read",
+              "single_edit",
+              "multi_edit",
+              "debug",
+              "architecture",
+              "local_workflow",
+              "release"
+            ]
+          }
+        }
+      }
+    },
+    "routing": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "restoreModelAfterPrompt": {
+          "type": "boolean"
+        },
+        "restoreThinkingAfterPrompt": {
+          "type": "boolean"
+        }
+      }
+    },
+    "thresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "largeContextTokens": {
+          "type": "number",
+          "minimum": 0
+        },
+        "hugeContextTokens": {
+          "type": "number",
+          "minimum": 0
+        },
+        "longPromptChars": {
+          "type": "number",
+          "minimum": 0
+        },
+        "veryLongPromptChars": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "tools": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "manage": {
+          "type": "boolean"
+        },
+        "preserveCustomTools": {
+          "type": "boolean"
+        },
+        "readOnlyTools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "writeTools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "toolEconomy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "measureResults": {
+          "type": "boolean"
+        },
+        "truncateOversized": {
+          "type": "boolean"
+        },
+        "maxResultTokens": {
+          "type": "number",
+          "minimum": 100
+        },
+        "preserveHeadChars": {
+          "type": "number",
+          "minimum": 0
+        },
+        "preserveTailChars": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "languages": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "en",
+              "uk",
+              "ru",
+              "es",
+              "fr",
+              "de",
+              "pt",
+              "unknown"
+            ]
+          }
+        }
+      }
+    },
     "debug": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "dryRun": { "type": "boolean" },
-        "trace": { "type": "boolean" },
-        "verbose": { "type": "boolean" },
-        "retentionDays": { "type": "number", "minimum": 1 },
-        "redact": { "type": "boolean" }
+        "dryRun": {
+          "type": "boolean"
+        },
+        "trace": {
+          "type": "boolean"
+        },
+        "verbose": {
+          "type": "boolean"
+        },
+        "retentionDays": {
+          "type": "number",
+          "minimum": 1
+        },
+        "redact": {
+          "type": "boolean"
+        }
       }
     },
-    "promptDiscipline": { "$ref": "#/$defs/object" },
-    "promptSimplification": { "$ref": "#/$defs/object" },
-    "ui": { "$ref": "#/$defs/object" }
-  },
-  "$defs": {
-    "modelList": {
-      "type": "array",
-      "minItems": 1,
-      "items": { "type": "string", "minLength": 1 }
-    },
-    "modelTiers": {
+    "promptDiscipline": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "classifier": { "$ref": "#/$defs/modelList" },
-        "simple": { "$ref": "#/$defs/modelList" },
-        "medium": { "$ref": "#/$defs/modelList" },
-        "complex": { "$ref": "#/$defs/modelList" }
+        "enabled": {
+          "type": "boolean"
+        },
+        "maxAnswerBulletsSimple": {
+          "type": "number",
+          "minimum": 1
+        }
       }
     },
-    "thinking": {
-      "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
+    "promptSimplification": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "compressionEnabled": {
+          "type": "boolean"
+        },
+        "minCompressionSavingsTokens": {
+          "type": "number",
+          "minimum": 0
+        },
+        "maxClassifierPromptChars": {
+          "type": "number",
+          "minimum": 400
+        },
+        "maxLineChars": {
+          "type": "number",
+          "minimum": 80
+        },
+        "headLines": {
+          "type": "number",
+          "minimum": 0
+        },
+        "tailLines": {
+          "type": "number",
+          "minimum": 0
+        },
+        "preserveSignalLines": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
     },
-    "object": {
-      "type": "object"
+    "ui": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "type": "boolean"
+        },
+        "notifyDecisions": {
+          "type": "boolean"
+        }
+      }
     }
   }
 }

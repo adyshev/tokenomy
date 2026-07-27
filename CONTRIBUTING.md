@@ -2,8 +2,8 @@
 
 Tokenomy is currently in beta. Contributions should keep the project focused on
 safe, predictable routing for Pi users on ChatGPT Plus Codex. Plus is the
-project's live-tested subscription target; ChatGPT Pro remains expected
-compatible but unvalidated.
+project's live-tested and supported subscription target. ChatGPT Pro is
+untested and unsupported until it receives its own compatibility evidence.
 
 ## Development Setup
 
@@ -31,14 +31,20 @@ quota:
 ```bash
 TOKENOMY_LIVE_EVAL=1 npm run test:live
 TOKENOMY_ECON_EVAL=1 npm run test:economic
+TOKENOMY_ECON_EVAL=1 TOKENOMY_ECON_PROFILE=full \
+TOKENOMY_ECON_ARMS=baseline,router,full npm run test:economic
+npm run test:catalog
 ```
 
 Use `TOKENOMY_LIVE_EVALUATOR=1` only when the additional evaluator call is
 intended. The manual `Live Tokenomy Evaluation` workflow requires a
 self-hosted runner with an existing Pi sign-in.
 
-GitHub Actions runs JSON validation, strict typechecking, `npm test`, and a
-packed-install smoke test on Linux and macOS for every push and pull request.
+GitHub Actions runs JSON/schema validation, strict typechecking, `npm test`, and
+a packed-install smoke test on Linux, macOS, and Windows, plus a Pi compatibility
+matrix against 0.82.1 and the latest 0.82.x patch, for every push and pull
+request. An authenticated self-hosted schedule checks Plus model-catalog and
+rate-card drift.
 
 ## Branch And PR Policy
 

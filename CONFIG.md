@@ -245,7 +245,14 @@ Do not put credentials or cookies in this file.
     "sessionCredits": 0,
     "dailyCredits": 0,
     "warnAtPercent": 80,
-    "policy": "warn"
+    "policy": "warn",
+    "reserveCredits": 0,
+    "maxDownshiftTiers": 1,
+    "tierSessionCredits": {
+      "simple": 0,
+      "medium": 0,
+      "complex": 0
+    }
   }
 }
 ```
@@ -254,7 +261,10 @@ Zero disables that budget. `policy` controls later non-high-risk turns:
 `warn` leaves routing unchanged, `save` downshifts one tier, and `ask` asks
 before keeping the recommended tier (and downshifts when declined or when no
 UI is available). High-risk work is never budget-downshifted. Plan-credit
-conversion remains an estimate.
+conversion remains an estimate. `reserveCredits` keeps part of both session and
+daily limits unspent for later work. `maxDownshiftTiers` is `1` or `2`.
+`tierSessionCredits` optionally caps spend by routed tier. The dashboard uses
+the recent observed average to estimate how many spendable turns remain.
 
 ## Cache
 
@@ -314,6 +324,11 @@ monthly and lifetime rollups are retained.
 `/tokenomy dashboard` summarizes today, recent 7-day changes, a 30-day quality
 and savings view, configured budgets, account-quota adapter status, and
 per-mode comparisons.
+
+Use `/tokenomy data` to list all local state paths, sizes, and modification
+times. `/tokenomy data purge cache|telemetry|memory|debug|all` selectively
+removes data while preserving `.pi/tokenomy.json`; `all` requires confirmation
+when UI is available.
 
 The default plan-credit estimate uses the OpenAI Codex rate card snapshot dated
 `2026-07-27`. Token counts are measured; the conversion is explicitly an
