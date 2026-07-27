@@ -95,8 +95,10 @@ test("publish workflow verifies npm before creating tag and release", () => {
   assert.match(workflow, /npm dist-tag add "\$package@\$version" latest/);
   assert.match(
     workflow,
-    /test "\$\(npm view "\$package@latest" version\)" = "\$version"/,
+    /for tag_attempt in 1 2 3 4 5 6/,
   );
+  assert.match(workflow, /npm latest has not propagated \$version yet/);
+  assert.match(workflow, /test "\$actual_latest" = "\$version"/);
 });
 
 test("economic evaluation is paired, fixed-baseline, and explicitly opt-in", () => {
