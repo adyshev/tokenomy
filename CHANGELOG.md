@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.24-beta - 2026-07-27
 
 - Added `save`, `balanced`, and `quality` economy modes, configurable
   plan-credit rate cards, live-classifier session budgets, and conservative
