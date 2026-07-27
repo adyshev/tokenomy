@@ -10,12 +10,8 @@ on:
 
 jobs:
   test:
-    name: Node tests (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
+    name: Node tests
+    runs-on: ubuntu-latest
 
     steps:
       - name: Check out repository
@@ -37,6 +33,26 @@ jobs:
 
       - name: Run tests
         run: npm test
+
+  package-smoke:
+    name: Packed install (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: npm ci
 
       - name: Test packed npm installation
         run: npm run test:package
