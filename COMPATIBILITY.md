@@ -10,13 +10,20 @@ Tokenomy currently targets a narrow environment by design.
 - `pi install npm:tokenomy-pi`
 - `pi install https://github.com/adyshev/tokenomy`
 - Node.js 22.19 or newer
-- ChatGPT Plus/Pro Codex authenticated in Pi
+- ChatGPT Plus Codex authenticated in Pi (live-tested)
 - Pi `openai-codex` provider
 - Provider-qualified custom tier lists for other Pi providers
 - Default model IDs:
   - `gpt-5.4-mini`
   - `gpt-5.4`
   - `gpt-5.5`
+
+## Expected Compatible, Not Yet Validated
+
+- ChatGPT Pro with Codex authentication. OpenAI uses the same Codex provider
+  and token-based rate card for Plus and Pro, but Tokenomy has not yet run its
+  live evaluation suite on a Pro account. Pro compatibility is best-effort
+  until that validation is complete.
 
 ## Assumptions
 

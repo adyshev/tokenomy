@@ -1,7 +1,9 @@
 # Contributing
 
 Tokenomy is currently in beta. Contributions should keep the project focused on
-safe, predictable routing for Pi users on ChatGPT Plus/Pro Codex.
+safe, predictable routing for Pi users on ChatGPT Plus Codex. Plus is the
+project's live-tested subscription target; ChatGPT Pro remains expected
+compatible but unvalidated.
 
 ## Development Setup
 

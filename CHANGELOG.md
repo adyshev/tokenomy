@@ -22,6 +22,8 @@
 - Upgraded telemetry rollups to schema version 3 while retaining v2 data.
 - Automated npm verification, matching `v<version>` tag creation, and
   idempotent latest GitHub Release creation in the publish workflow.
+- Clarified that ChatGPT Plus is Tokenomy's live-tested subscription target;
+  ChatGPT Pro is expected to be compatible but remains unvalidated.
 - Expanded the integration suite from 60 to 73 tests.
 
 ## 0.1.24-beta - 2026-07-27
@@ -122,8 +124,8 @@
 
 ## 0.1.13-beta - 2026-07-08
 - Improved the npm/GitHub package description and README introduction to state
-  Tokenomy's user-facing goal, default benefits, Plus/Pro Codex scope, local
-  memory, compression, safety guards, and telemetry.
+  Tokenomy's user-facing goal, default benefits, Codex subscription scope,
+  local memory, compression, safety guards, and telemetry.
 
 ## 0.1.12-beta - 2026-07-08
 - Added default-on local project memory with automatic safe fact discovery and advisory injection.

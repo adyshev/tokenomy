@@ -1,8 +1,12 @@
 # Tokenomy Pi Extension
 
-Tokenomy is a token-economy layer for Pi users working with Codex on the
-ChatGPT Plus/Pro plan. It is designed to reduce total token spend during normal
-project work without forcing you to manually choose a model for every prompt.
+Tokenomy is a token-economy layer for Pi users working with Codex through a
+ChatGPT Plus subscription. Its shipped defaults and live evaluation are focused
+on Plus. ChatGPT Pro uses the same Codex model and credit infrastructure and is
+expected to work, but it has not yet been validated by the project.
+
+Tokenomy is designed to reduce total token spend during normal project work
+without forcing you to manually choose a model for every prompt.
 
 The product goal is:
 
@@ -77,7 +81,11 @@ user prompt always overrides remembered project facts.
 
 Tokenomy's shipped defaults remain focused on one well-defined setup:
 
-- Pi users authenticated with ChatGPT Plus/Pro Codex access.
+- Pi users authenticated with ChatGPT Plus Codex access. This is Tokenomy's
+  primary, live-tested setup.
+- ChatGPT Pro is expected to be compatible with the same Codex provider and
+  rate card, but remains unvalidated and best-effort until it passes the live
+  evaluation suite.
 - The `openai-codex` model family exposed by Pi. Other providers are supported
   through provider-qualified model IDs and an explicit allowlist.
 - Project-local routing through `.pi/extensions/tokenomy/index.ts`.
@@ -90,7 +98,7 @@ Tokenomy is still beta software. It is ready for private dogfooding and early
 adopter use, but it is not yet a universal model router for every provider,
 model catalog, or coding-agent runtime. Multi-provider configuration is
 available, but the shipped tiers and rate card remain intentionally optimized
-for Codex models available to Plus/Pro users through Pi.
+for Codex models available to ChatGPT Plus users through Pi.
 
 ## Files
 
@@ -124,13 +132,13 @@ Start Pi in this directory:
 pi
 ```
 
-Make sure ChatGPT Plus/Pro Codex is authenticated:
+Make sure Codex is authenticated with your ChatGPT Plus account:
 
 ```text
 /login
 ```
 
-Then select the ChatGPT Plus/Pro Codex provider.
+Then select the `openai-codex` provider.
 
 Useful commands inside Pi:
 

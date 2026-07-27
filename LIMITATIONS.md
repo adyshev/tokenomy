@@ -6,9 +6,11 @@ heuristic and should be treated as advisory rather than perfect.
 ## Codex-Focused Defaults
 
 The default config targets Pi's `openai-codex` provider and the Codex model IDs
-available to ChatGPT Plus/Pro users. Other providers require provider-qualified
-model IDs and an explicit `providers.allowed` entry. Cost/credit comparisons
-also require suitable rate-card entries.
+available to ChatGPT Plus users. Plus is the project's live-tested subscription
+target. ChatGPT Pro uses the same Codex provider and rate card and is expected
+to work, but has not yet been validated by the project. Other providers require
+provider-qualified model IDs and an explicit `providers.allowed` entry.
+Cost/credit comparisons also require suitable rate-card entries.
 
 ## Heuristic Routing
 
