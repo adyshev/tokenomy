@@ -12,6 +12,7 @@ Project config wins over global config.
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `enabled` | boolean | `true` | Enables Tokenomy routing. |
+| `mode` | `save`, `balanced`, or `quality` | `balanced` | Controls uncertain-prompt fallback: prioritize lower spend, the default risk balance, or stronger quality protection. |
 | `provider` | string | `openai-codex` | Provider used for model IDs that do not include a provider prefix. |
 
 ## Models
@@ -55,6 +56,8 @@ Supported values are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and
     "onlyWhenAmbiguous": true,
     "maxPromptChars": 4000,
     "maxEstimatedClassifierTokens": 1400,
+    "maxCallsPerSession": 12,
+    "minEstimatedNetCredits": 0.01,
     "minConfidence": 0.95
   }
 }
@@ -65,6 +68,34 @@ Its result is accepted only when confidence is at least `minConfidence`.
 Accepted decisions are cached when `cache.enabled` is true. Otherwise Tokenomy
 uses risk-aware fallback: low-risk uncertainty goes cheap, medium-risk work goes
 to the medium tier, and configured high-risk intents go to the complex tier.
+Before a live classifier call, Tokenomy estimates the classifier's own plan
+credits and a conservative routing benefit. It skips the call when the expected
+net benefit is below `minEstimatedNetCredits` or the session reaches
+`maxCallsPerSession`. Cached decisions remain available without consuming the
+live-call budget.
+
+## Plan Credits
+
+```json
+{
+  "planCredits": {
+    "enabled": true,
+    "rateCardVersion": "2026-07-27",
+    "rates": {
+      "gpt-5.4-mini": {
+        "input": 18.75,
+        "cacheRead": 1.875,
+        "output": 113
+      }
+    }
+  }
+}
+```
+
+Rates are estimated plan credits per one million tokens. The bundled table is a
+versioned snapshot; override it when OpenAI changes the rate card or when using
+different model IDs. Set `enabled` to `false` to retain measured tokens without
+calculating plan credits or classifier break-even estimates.
 
 ## Cache
 
@@ -114,16 +145,42 @@ entries are capped. They include measured token categories, cache inputs,
 request counts, measured/unavailable coverage, Pi-reported cost, estimated
 ChatGPT plan credits, classifier overhead, tier/source/intent/model
 distribution, adaptive fallbacks, prompt-shape distribution, action-count
-distribution, multi-step prompt counts, and compression guard rejections.
+distribution, multi-step prompt counts, completion proxies, tool calls/errors,
+retry runs, compactions, and compression guard rejections.
 `rollupRetentionDays` controls daily rollup retention and defaults to 400 days;
 monthly and lifetime rollups are retained.
 
-The plan-credit estimate uses the OpenAI Codex rate card snapshot dated
+The default plan-credit estimate uses the OpenAI Codex rate card snapshot dated
 `2026-07-27`. Token counts are measured; the conversion is explicitly an
-estimate because the rate card can change. Reports cover only the current Pi
-project, not account-wide ChatGPT/Codex usage. Historical non-zero
+estimate because the rate card can change. Completion means Pi ended the turn
+with `stop` or `length`; it is a cost-per-completed-turn proxy, not an
+independent quality judgment. Reports cover only the current Pi project, not
+account-wide ChatGPT/Codex usage. Historical non-zero
 `estimatedTokensSaved`, `baselineCostUnits`, and `actualCostUnits` values are
 loaded for compatibility but labeled as pre-v2 model-rank proxies.
+
+When the provider exposes recognized response headers, Tokenomy stores the
+latest rate-limit snapshot in `.pi/tokenomy-cache/account-limits.json`.
+`/tokenomy limits` displays it with explicit project/process scope. Auth,
+cookies, and unrelated response headers are not stored.
+
+## Context Economy
+
+```json
+{
+  "contextEconomy": {
+    "autoCompact": false,
+    "compactAtPercent": 85,
+    "minTokens": 80000,
+    "cooldownTurns": 8,
+    "customInstructions": "Preserve the active task, decisions, modified files, validation results, blockers, and exact next steps. Drop repeated logs and superseded exploration."
+  }
+}
+```
+
+Use `/tokenomy compact` for an immediate, task-preserving compaction. Automatic
+compaction is opt-in; when enabled, it runs only above both the percentage and
+token thresholds, while Pi is idle, and after the configured cooldown.
 
 ## Routing
 

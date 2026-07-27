@@ -51,9 +51,11 @@ requests, and Pi-reported cost. A settled turn with no usable provider data is
 marked `unavailable` instead of being estimated from prompt characters.
 
 The ChatGPT plan-credit conversion is still an estimate. It uses a versioned
-local copy of the OpenAI Codex rate card and may become stale when OpenAI
-changes plan pricing or model IDs. Reports cover only Tokenomy turns in the
-current Pi project; they are not account-wide quota or billing reports.
+local copy of the OpenAI Codex rate card, which can be overridden in config,
+and may become stale when OpenAI changes plan pricing or model IDs. Reports
+cover only Tokenomy turns in the current Pi project; they are not account-wide
+quota or billing reports. `/tokenomy limits` can only show recognized response
+headers exposed to this Pi process, so it may be unavailable or incomplete.
 
 Telemetry created before schema version 2 may contain model-rank-based
 `estimatedTokensSaved` and cost-unit fields. These are retained for migration
@@ -61,10 +63,17 @@ but labeled as legacy proxies, never as measured tokens or credits.
 
 ## Quality Measurement
 
-Tokenomy does not yet have a task-success evaluation loop. Routing reports
-usage and route distribution, but they cannot yet prove that a cheaper route
-avoided retries or preserved task quality. Cost-per-success evaluation remains
+Tokenomy records a completion proxy from Pi stop reasons, tool errors, and retry
+runs. This supports cost-per-completed-turn monitoring, but it is not an
+independent task-success evaluation and cannot prove that a cheaper route
+preserved quality. User-rated or evaluator-backed success measurement remains
 required before making causal savings claims.
+
+## Context Compaction
+
+Automatic compaction is disabled by default. Compaction saves future context
+tokens but is lossy, so users should review the task-preservation instructions
+before enabling `contextEconomy.autoCompact`.
 
 ## Model Availability
 

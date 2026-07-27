@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Added `save`, `balanced`, and `quality` economy modes, configurable
+  plan-credit rate cards, live-classifier session budgets, and conservative
+  classifier break-even gating.
+- Added completion/tool-error/retry telemetry and clearly labeled
+  cost-per-completed-turn reporting without claiming verified task success.
+- Added sanitized provider rate-limit header snapshots and `/tokenomy limits`
+  with explicit project/process scope.
+- Added `/tokenomy compact`, opt-in threshold compaction with cooldown and
+  task-preservation instructions, and compaction rollups.
 - Replaced model-rank “token-equivalent” claims for new turns with
   provider-reported input, cached-input, cache-write, output, reasoning,
   total-token, request, and cost accounting from Pi `agent_end` messages.

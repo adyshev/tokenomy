@@ -38,6 +38,9 @@ likely to cost more through retries, excessive tool calls, or incorrect edits.
 - Preserves the user's startup model, then restores both the pre-route model
   and thinking level after each fully settled prompt.
 - Uses a confidence threshold before trusting classifier decisions.
+- Applies a per-session classifier budget and a conservative break-even check,
+  so routing does not spend more estimated credits than it can plausibly save.
+- Offers `save`, `balanced`, and `quality` economy modes.
 - Falls back conservatively when routing confidence is too low.
 - Learns local project memory such as package names, test commands, important
   files, and release workflow hints.
@@ -49,7 +52,11 @@ likely to cost more through retries, excessive tool calls, or incorrect edits.
 - Measures provider-reported input, cached-input, cache-write, output,
   reasoning, total-token, request, and cost usage after each turn.
 - Builds daily, monthly, and lifetime telemetry rollups with explicit
-  measured/unavailable coverage and estimated ChatGPT plan credits.
+  measured/unavailable coverage, configurable plan-credit estimates,
+  completion/tool-error proxies, and compaction counts.
+- Shows recognized provider limit headers when available, with explicit
+  project/process scope.
+- Supports manual task-preserving compaction and opt-in threshold compaction.
 
 Tokenomy does not rewrite the final prompt sent to the selected agent model.
 Memory and compression are routing/context optimizations only, and the current
@@ -119,6 +126,9 @@ Useful commands inside Pi:
 /tokenomy
 /tokenomy off
 /tokenomy on
+/tokenomy mode save
+/tokenomy mode balanced
+/tokenomy mode quality
 /tokenomy reload
 /tokenomy explain
 /tokenomy history
@@ -127,6 +137,8 @@ Useful commands inside Pi:
 /tokenomy report 30d
 /tokenomy report month
 /tokenomy report lifetime
+/tokenomy limits
+/tokenomy compact
 /tokenomy memory
 /tokenomy memory show
 /tokenomy memory refresh
@@ -149,9 +161,12 @@ mode, and the plan rate-card version.
 `/tokenomy explain` shows the signals and reason for the last routing decision.
 `/tokenomy history` shows recent prompt-safe routing telemetry.
 `/tokenomy report` shows a 30-day local telemetry report with measured token
-usage, cache-read ratio, estimated plan credits, route distribution, and
-fallback/guard counts.
+usage, cache-read ratio, estimated plan credits, completion/tool-error proxies,
+route distribution, and fallback/guard counts.
 Use `/tokenomy report 7d`, `/tokenomy report 30d`, `/tokenomy report month`, or `/tokenomy report lifetime` for specific periods.
+`/tokenomy limits` shows the latest recognized provider limit headers when Pi
+can see them; it is not an account-wide quota report.
+`/tokenomy compact` triggers task-preserving context compaction.
 `/tokenomy memory` shows local project memory status.
 `/tokenomy memory show` shows stored project facts.
 `/tokenomy export-history` shows the local routing history file path.

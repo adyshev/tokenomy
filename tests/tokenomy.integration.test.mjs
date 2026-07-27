@@ -77,6 +77,7 @@ function createHarness(cwd, options = {}) {
   const thinkingLevels = [];
   const notifications = [];
   const statuses = new Map();
+  const compactions = [];
   const models = options.models ?? MODELS;
   let currentThinking = options.initialThinking ?? "high";
 
@@ -86,7 +87,17 @@ function createHarness(cwd, options = {}) {
     thinkingLevel: currentThinking,
     signal: new AbortController().signal,
     hasUI: true,
-    getContextUsage: () => ({ tokens: options.contextTokens ?? 12_000 }),
+    getContextUsage: () =>
+      options.contextUsage ?? {
+        tokens: options.contextTokens ?? 12_000,
+        contextWindow: 200_000,
+        percent: ((options.contextTokens ?? 12_000) / 200_000) * 100,
+      },
+    isIdle: () => options.isIdle ?? true,
+    compact(compactOptions) {
+      compactions.push(compactOptions);
+      compactOptions?.onComplete?.({});
+    },
     modelRegistry: {
       find(provider, id) {
         return models.find(
@@ -166,6 +177,7 @@ function createHarness(cwd, options = {}) {
     selectedModels,
     statuses,
     thinkingLevels,
+    compactions,
   };
 }
 
@@ -196,6 +208,7 @@ function assistantMessage(model, usage = {}) {
     role: "assistant",
     model,
     content: [{ type: "text", text: "done" }],
+    stopReason: "stop",
     usage: {
       input: 1_000,
       output: 200,
@@ -1780,4 +1793,234 @@ test("toggles dry-run from the tokenomy command", async () => {
 
   await runTokenomyCommand(harness, "dry-run off");
   assert.equal(harness.notifications.at(-1).message, "Tokenomy dry-run disabled");
+});
+
+test("supports save, balanced, and quality economy modes", async () => {
+  const quality = createHarness(createProjectConfig({ mode: "quality" }));
+  await startSession(quality);
+  await routePrompt(quality, "Help with the project.");
+  assert.equal(quality.selectedModels.at(-1), "openai-codex/gpt-5.4");
+
+  const save = createHarness(createProjectConfig());
+  await startSession(save);
+  await runTokenomyCommand(save, "mode save");
+  await routePrompt(save, "Help with the project.");
+  assert.equal(save.selectedModels.at(-1), "openai-codex/gpt-5.4-mini");
+  assert.equal(save.notifications.at(-2).message, "Tokenomy economy mode: save");
+});
+
+test("skips live classification when its session budget is exhausted", async () => {
+  const before = completeCalls.length;
+  const harness = createHarness(
+    createProjectConfig({
+      classifier: {
+        enabled: true,
+        onlyWhenAmbiguous: true,
+        maxPromptChars: 4000,
+        maxEstimatedClassifierTokens: 1400,
+        maxCallsPerSession: 0,
+        minEstimatedNetCredits: 0,
+        minConfidence: 0.95,
+      },
+    }),
+    {
+      classifierAuth: { ok: true, apiKey: "test-key", headers: {}, env: {} },
+    },
+  );
+  await startSession(harness);
+
+  await routePrompt(
+    harness,
+    "Please analyze this project context and decide the best routing approach for future provider support. Keep the answer practical and account for confidence, prompt size, and model availability.",
+  );
+
+  assert.equal(completeCalls.length, before);
+  await runTokenomyCommand(harness, "explain");
+  assert.match(
+    harness.notifications.at(-1).message,
+    /classifier session budget exhausted/,
+  );
+});
+
+test("uses project-configured plan credit rates", async () => {
+  const harness = createHarness(
+    createProjectConfig({
+      planCredits: {
+        enabled: true,
+        rateCardVersion: "test-card",
+        rates: {
+          "gpt-5.4-mini": {
+            input: 100,
+            cacheRead: 10,
+            output: 200,
+          },
+        },
+      },
+    }),
+  );
+  await startSession(harness);
+  await routePrompt(harness, "What time is it?");
+  await finishAgent(harness, {
+    type: "agent_end",
+    messages: [
+      assistantMessage("gpt-5.4-mini", {
+        input: 1_000,
+        cacheRead: 2_000,
+        output: 500,
+        totalTokens: 3_500,
+      }),
+    ],
+  });
+
+  const rollups = JSON.parse(
+    readFileSync(
+      join(harness.ctx.cwd, ".pi/tokenomy-cache/telemetry-rollups.json"),
+      "utf8",
+    ),
+  );
+  assert.equal(rollups.lifetime.estimatedPlanCredits, 0.22);
+  await runTokenomyCommand(harness, "report");
+  assert.match(harness.notifications.at(-1).message, /rate card test-card/);
+});
+
+test("records completion proxy, tool errors, and retry runs", async () => {
+  const harness = createHarness(createProjectConfig());
+  await startSession(harness);
+  await routePrompt(harness, "Inspect the project and explain the result.");
+  harness.handlers.get("tool_execution_end")(
+    {
+      type: "tool_execution_end",
+      toolCallId: "one",
+      toolName: "read",
+      result: {},
+      isError: false,
+    },
+    harness.ctx,
+  );
+  harness.handlers.get("tool_execution_end")(
+    {
+      type: "tool_execution_end",
+      toolCallId: "two",
+      toolName: "read",
+      result: {},
+      isError: true,
+    },
+    harness.ctx,
+  );
+  await harness.handlers.get("agent_end")(
+    {
+      type: "agent_end",
+      messages: [
+        { ...assistantMessage("gpt-5.4-mini"), stopReason: "toolUse" },
+      ],
+    },
+    harness.ctx,
+  );
+  await harness.handlers.get("agent_end")(
+    {
+      type: "agent_end",
+      messages: [assistantMessage("gpt-5.4-mini")],
+    },
+    harness.ctx,
+  );
+  await harness.handlers.get("agent_settled")(
+    { type: "agent_settled" },
+    harness.ctx,
+  );
+
+  const history = JSON.parse(
+    readFileSync(
+      join(harness.ctx.cwd, ".pi/tokenomy-cache/routing-history.json"),
+      "utf8",
+    ),
+  );
+  assert.equal(history.entries[0].outcome, "completed");
+  assert.equal(history.entries[0].toolCalls, 2);
+  assert.equal(history.entries[0].toolErrors, 1);
+  assert.equal(history.entries[0].retryRuns, 1);
+
+  await runTokenomyCommand(harness, "report");
+  assert.match(harness.notifications.at(-1).message, /1 completed/);
+  assert.match(harness.notifications.at(-1).message, /2 calls, 1 errors/);
+  assert.match(
+    harness.notifications.at(-1).message,
+    /not independently verified task success/,
+  );
+});
+
+test("stores only recognized provider limit headers and reports their scope", async () => {
+  const harness = createHarness(createProjectConfig());
+  await startSession(harness);
+  harness.handlers.get("after_provider_response")(
+    {
+      type: "after_provider_response",
+      status: 200,
+      headers: {
+        "x-ratelimit-remaining-requests": "42",
+        "x-ratelimit-reset-requests": "30s",
+        authorization: "secret",
+        "set-cookie": "secret-cookie",
+      },
+    },
+    harness.ctx,
+  );
+
+  const snapshotText = readFileSync(
+    join(harness.ctx.cwd, ".pi/tokenomy-cache/account-limits.json"),
+    "utf8",
+  );
+  assert.match(snapshotText, /x-ratelimit-remaining-requests/);
+  assert.doesNotMatch(snapshotText, /authorization|set-cookie|secret/);
+
+  await runTokenomyCommand(harness, "limits");
+  assert.match(
+    harness.notifications.at(-1).message,
+    /not total ChatGPT\/Codex account usage/,
+  );
+});
+
+test("auto-compacts high context with cooldown and records compactions", async () => {
+  const harness = createHarness(
+    createProjectConfig({
+      contextEconomy: {
+        autoCompact: true,
+        compactAtPercent: 85,
+        minTokens: 80_000,
+        cooldownTurns: 2,
+        customInstructions: "Preserve active work.",
+      },
+    }),
+    {
+      contextUsage: {
+        tokens: 180_000,
+        contextWindow: 200_000,
+        percent: 90,
+      },
+    },
+  );
+  await startSession(harness);
+  harness.handlers.get("turn_end")({ type: "turn_end" }, harness.ctx);
+
+  assert.equal(harness.compactions.length, 1);
+  assert.equal(
+    harness.compactions[0].customInstructions,
+    "Preserve active work.",
+  );
+  harness.handlers.get("session_compact")(
+    {
+      type: "session_compact",
+      compactionEntry: {},
+      fromExtension: true,
+      reason: "threshold",
+      willRetry: false,
+    },
+    harness.ctx,
+  );
+  const rollups = JSON.parse(
+    readFileSync(
+      join(harness.ctx.cwd, ".pi/tokenomy-cache/telemetry-rollups.json"),
+      "utf8",
+    ),
+  );
+  assert.equal(rollups.lifetime.compactions, 1);
 });
