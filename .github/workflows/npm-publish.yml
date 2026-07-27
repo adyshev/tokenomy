@@ -33,6 +33,9 @@ jobs:
       - name: Validate JSON
         run: npm run json:check
 
+      - name: Verify generated configuration schema
+        run: npm run schema:check
+
       - name: Run tests
         run: npm test
 

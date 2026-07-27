@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.2.0-beta.2 - 2026-07-27
+
+- Made statistics, routing history, and telemetry read-modify-write updates
+  transactional across concurrent Pi processes; added a four-process race test.
+- Replaced the partial schema with a generated, exhaustive, strict schema and
+  runtime leaf validation from the same source of truth.
+- Expanded the economic benchmark to a 30-case corpus, repeatable
+  counterbalanced arms, classifier-inclusive measurement, real-repository
+  manifests, Wilson intervals, trend evidence, and a quality non-inferiority
+  gate.
+- Added authenticated Plus catalog/rate freshness checks, a weekly self-hosted
+  workflow, and the observed `gpt-5.3-codex-spark` catalog entry without routing
+  to it before a verified rate exists.
+- Added Windows packed-install CI, a Pi 0.82.1/latest-0.82.x matrix, and legacy
+  stats/v2 rollup migration coverage.
+- Split defaults, schema, budget policy, and evaluation logic into focused
+  modules.
+- Added reserved credits, per-tier session budgets, one/two-tier downshifts,
+  per-tier dashboard spend, and estimated remaining turns.
+- Added `/tokenomy data` inventory plus selective cache, telemetry, memory,
+  debug, and confirmed all-data purge commands.
+- Restricted supported subscription wording to the live-tested ChatGPT Plus
+  setup; Pro, non-Codex providers, and native Codex integration are explicitly
+  unsupported or experimental rather than implied compatible.
+
 ## 0.2.0-beta.1 - 2026-07-27
 
 - Updated Plus-tested routing defaults for the current Codex catalog:

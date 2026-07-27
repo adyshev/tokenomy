@@ -67,7 +67,14 @@
     "sessionCredits": 0,
     "dailyCredits": 0,
     "warnAtPercent": 80,
-    "policy": "warn"
+    "policy": "warn",
+    "reserveCredits": 0,
+    "maxDownshiftTiers": 1,
+    "tierSessionCredits": {
+      "simple": 0,
+      "medium": 0,
+      "complex": 0
+    }
   },
   "telemetry": {
     "enabled": true,

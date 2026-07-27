@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import {
   existsSync,
   mkdtempSync,
@@ -14,6 +15,7 @@ import test from "node:test";
 
 import { completeCalls } from "./pi-ai-compat-shim.mjs";
 import tokenomy from "../.pi/extensions/tokenomy/index.ts";
+import { TOKENOMY_CONFIG_SCHEMA } from "../.pi/extensions/tokenomy/lib/config-schema.ts";
 
 const PACKAGE_VERSION = JSON.parse(readFileSync("package.json", "utf8"))
   .version;
@@ -38,6 +40,10 @@ test("package manifest declares Tokenomy as an installable Pi extension", () => 
   assert.equal(
     manifest.scripts["test:economic"],
     "node scripts/economic-evaluation.mjs",
+  );
+  assert.equal(
+    manifest.scripts["test:catalog"],
+    "node --experimental-strip-types scripts/catalog-check.mjs",
   );
   assert.equal(manifest.scripts["test:package"], "node scripts/package-smoke.mjs");
   assert.ok(manifest.files.includes(".pi/extensions/tokenomy"));
@@ -76,15 +82,20 @@ test("publish workflow verifies npm before creating tag and release", () => {
 test("economic evaluation is paired, fixed-baseline, and explicitly opt-in", () => {
   const script = readFileSync("scripts/economic-evaluation.mjs", "utf8");
   assert.match(script, /TOKENOMY_ECON_EVAL !== "1"/);
-  assert.match(script, /paired fresh-workspace, counterbalanced-order comparison/);
+  assert.match(script, /paired fresh-workspace, counterbalanced-order, repeated/);
   assert.match(script, /TOKENOMY_ECON_BASELINE_MODEL/);
-  assert.match(script, /const tokenomyFirst = index % 2 === 1/);
+  assert.match(script, /TOKENOMY_ECON_REPEATS/);
+  assert.match(script, /TOKENOMY_ECON_MANIFEST/);
+  assert.match(script, /qualityGatePassed/);
 });
 
-test("CI tests the packed package on Linux and macOS", () => {
+test("CI tests the packed package on Linux, macOS, and Windows", () => {
   const workflow = readFileSync(".github/workflows/ci.yml", "utf8");
-  assert.match(workflow, /ubuntu-latest, macos-latest/);
+  const packageSmoke = readFileSync("scripts/package-smoke.mjs", "utf8");
+  assert.match(workflow, /ubuntu-latest, macos-latest, windows-latest/);
   assert.match(workflow, /npm run test:package/);
+  assert.match(packageSmoke, /process\.env\.npm_execpath/);
+  assert.match(packageSmoke, /spawnSync\(process\.execPath, \[npmCli, \.\.\.args\]/);
 });
 
 function modelLabel(model) {
@@ -1685,7 +1696,7 @@ test("warns about invalid config values", async () => {
 
   assert.match(
     harness.notifications.at(-1).message,
-    /classifier\.minConfidence must be a number from 0 to 1/,
+    /classifier\.minConfidence must be at most 1/,
   );
 });
 
@@ -2428,11 +2439,39 @@ test("ships current GPT-5.6 defaults and a configuration schema", () => {
   assert.equal(config.models.complex[0], "gpt-5.6-sol");
   assert.ok(config.models.simple.includes("gpt-5.6-luna"));
   assert.equal(schema.additionalProperties, false);
+  assert.equal(schema.properties.classifier.additionalProperties, false);
+  assert.equal(schema.properties.memory.additionalProperties, false);
+  assert.equal(
+    schema.properties.planCredits.properties.rates.additionalProperties
+      .additionalProperties,
+    false,
+  );
+  assert.deepEqual(schema, TOKENOMY_CONFIG_SCHEMA);
   assert.deepEqual(schema.properties.budgets.properties.policy.enum, [
     "warn",
     "save",
     "ask",
   ]);
+});
+
+test("rejects schema-invalid enum and range overrides before routing", async () => {
+  const harness = createHarness(
+    createProjectConfig({
+      mode: "turbo",
+      budgets: {
+        warnAtPercent: 0,
+      },
+    }),
+  );
+  await startSession(harness);
+  await runTokenomyCommand(harness, "status");
+
+  assert.match(
+    harness.notifications.find(({ message }) => message.includes("config warnings"))
+      .message,
+    /mode must be one of save, balanced, quality/,
+  );
+  assert.match(harness.notifications.at(-1).message, /Economy mode: balanced/);
 });
 
 test("ignores unknown and malformed config values without crashing", async () => {
@@ -2596,4 +2635,101 @@ test("persistent state uses atomic writes without leftover temporary files", asy
       }
     }
   }
+});
+
+test("transactional JSON updates preserve concurrent process increments", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "tokenomy-storage-race-"));
+  const path = join(cwd, "counter.json");
+  const runWorker = () =>
+    new Promise((resolve, reject) => {
+      const child = spawn(
+        process.execPath,
+        [
+          "--experimental-strip-types",
+          "tests/storage-worker.mjs",
+          path,
+          "75",
+        ],
+        { cwd: process.cwd(), stdio: "inherit" },
+      );
+      child.once("error", reject);
+      child.once("exit", (code) =>
+        code === 0 ? resolve() : reject(new Error(`worker exited ${code}`)),
+      );
+    });
+
+  await Promise.all([runWorker(), runWorker(), runWorker(), runWorker()]);
+
+  assert.equal(JSON.parse(readFileSync(path, "utf8")).count, 300);
+  assert.equal(
+    readdirSync(cwd).filter((name) => name.includes(".lock") || name.includes(".tmp-"))
+      .length,
+    0,
+  );
+});
+
+test("data inventory and selective purge expose and control local state", async () => {
+  const cwd = createProjectConfig({
+    memory: { enabled: true, inject: false },
+  });
+  const harness = createHarness(cwd);
+  await startSession(harness);
+  await routePrompt(harness, "Inspect package.json and explain the project.");
+
+  await runTokenomyCommand(harness, "data");
+  assert.match(harness.notifications.at(-1).message, /Tokenomy local data/);
+  assert.match(harness.notifications.at(-1).message, /project-local; never uploaded/);
+  assert.match(harness.notifications.at(-1).message, /routing history/);
+
+  const telemetry = join(cwd, ".pi/tokenomy-cache/telemetry-rollups.json");
+  const memory = join(cwd, ".pi/tokenomy-cache/project-memory.json");
+  assert.ok(existsSync(telemetry));
+  assert.ok(existsSync(memory));
+  await runTokenomyCommand(harness, "data purge cache");
+  assert.ok(existsSync(telemetry));
+  assert.ok(existsSync(memory));
+
+  await runTokenomyCommand(harness, "data purge all");
+  assert.equal(harness.confirmations.length, 1);
+  assert.equal(existsSync(join(cwd, ".pi/tokenomy-cache")), false);
+  assert.ok(existsSync(join(cwd, ".pi/tokenomy.json")));
+});
+
+test("loads legacy stats and v2 rollups and migrates them without data loss", async () => {
+  const cwd = createProjectConfig();
+  mkdirSync(join(cwd, ".pi/tokenomy-cache"), { recursive: true });
+  writeFileSync(
+    join(cwd, ".pi/tokenomy-stats.json"),
+    JSON.stringify({
+      lifetimeEstimatedTokensSaved: 120,
+      routedPrompts: 7,
+      sessionsStarted: 2,
+      updatedAt: "2025-01-01T00:00:00.000Z",
+    }),
+  );
+  writeFileSync(
+    join(cwd, ".pi/tokenomy-cache/telemetry-rollups.json"),
+    JSON.stringify({
+      version: 2,
+      updatedAt: "2025-01-01T00:00:00.000Z",
+      lifetime: { prompts: 4, totalTokens: 900 },
+      daily: {},
+      monthly: {},
+    }),
+  );
+  const harness = createHarness(cwd);
+  await startSession(harness);
+  await routePrompt(harness, "What does HTTP 201 mean?");
+
+  const stats = JSON.parse(
+    readFileSync(join(cwd, ".pi/tokenomy-stats.json"), "utf8"),
+  );
+  const rollups = JSON.parse(
+    readFileSync(join(cwd, ".pi/tokenomy-cache/telemetry-rollups.json"), "utf8"),
+  );
+  assert.equal(stats.lifetimeEstimatedTokensSaved, 120);
+  assert.equal(stats.routedPrompts, 8);
+  assert.equal(rollups.version, 3);
+  assert.equal(rollups.lifetime.prompts, 5);
+  assert.equal(rollups.lifetime.totalTokens, 900);
 });

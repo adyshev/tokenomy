@@ -13,9 +13,10 @@ or high-risk routing defects.
 
 The default config targets Pi's `openai-codex` provider and the Codex model IDs
 available to ChatGPT Plus users. Plus is the project's live-tested subscription
-target. ChatGPT Pro uses the same Codex provider and rate card and is expected
-to work, but has not yet been validated by the project. Other providers require
-provider-qualified model IDs and an explicit `providers.allowed` entry.
+target. ChatGPT Pro has not been tested and is unsupported; Tokenomy makes no
+compatibility claim for it. Other providers require provider-qualified model
+IDs and an explicit `providers.allowed` entry, and remain experimental because
+the project ships no provider-specific presets or live evidence for them.
 Cost/credit comparisons also require suitable rate-card entries.
 
 ## Heuristic Routing
@@ -118,5 +119,6 @@ personal account-limit integration, or terminal UI assertions. The separate
 and consumes real quota; it is never run by normal CI.
 
 `TOKENOMY_ECON_EVAL=1 npm run test:economic` adds a paired fresh-workspace,
-counterbalanced-order comparison against one fixed model. Both outputs use the
-same checks, but the small fixture set is evidence, not a universal claim.
+counterbalanced-order comparison against one fixed model. Its smoke profile is
+still only a quick check; the 30-case repeated profile and real-repository
+manifests improve coverage but remain evidence, not a universal claim.

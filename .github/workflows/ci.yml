@@ -28,6 +28,9 @@ jobs:
       - name: Validate JSON
         run: npm run json:check
 
+      - name: Verify generated configuration schema
+        run: npm run schema:check
+
       - name: Typecheck against supported Pi API
         run: npm run typecheck
 
@@ -40,7 +43,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
       - name: Check out repository
@@ -56,3 +59,32 @@ jobs:
 
       - name: Test packed npm installation
         run: npm run test:package
+
+  pi-compatibility:
+    name: Pi compatibility (${{ matrix.pi-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pi-version: ["0.82.1", "0.82"]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Select Pi compatibility version
+        run: npm install --no-save --ignore-scripts @earendil-works/pi-ai@${{ matrix.pi-version }} @earendil-works/pi-coding-agent@${{ matrix.pi-version }}
+
+      - name: Typecheck against Pi
+        run: npm run typecheck
+
+      - name: Run extension tests
+        run: npm test

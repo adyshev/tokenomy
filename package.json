@@ -1,6 +1,6 @@
 {
   "name": "tokenomy-pi",
-  "version": "0.2.0-beta.1",
+  "version": "0.2.0-beta.2",
   "description": "Automatic token-saving router for the Pi CLI using Pi's openai-codex provider, with visible local usage and quality evidence.",
   "license": "MIT",
   "type": "module",
@@ -28,6 +28,10 @@
     "CHANGELOG.md",
     "scripts/live-evaluation.mjs",
     "scripts/economic-evaluation.mjs",
+    "scripts/evaluation-core.mjs",
+    "scripts/evaluation-scenarios.mjs",
+    "scripts/catalog-check.mjs",
+    "scripts/generate-config-schema.mjs",
     "tsconfig.json",
     "types/tokenshrink.d.ts",
     "LICENSE"
@@ -39,7 +43,10 @@
     "test": "node --experimental-strip-types --loader ./tests/pi-extension-loader.mjs --test tests/*.test.mjs",
     "test:live": "node scripts/live-evaluation.mjs",
     "test:economic": "node scripts/economic-evaluation.mjs",
+    "test:catalog": "node --experimental-strip-types scripts/catalog-check.mjs",
     "test:package": "node scripts/package-smoke.mjs",
+    "schema:generate": "node --experimental-strip-types scripts/generate-config-schema.mjs",
+    "schema:check": "node --experimental-strip-types scripts/generate-config-schema.mjs --check",
     "typecheck": "tsc -p tsconfig.json",
     "json:check": "node -e \"for (const f of ['.pi/tokenomy.json','.pi/tokenomy.schema.json','.pi/settings.json','package.json']) JSON.parse(require('fs').readFileSync(f,'utf8')); console.log('json ok')\"",
     "pi:check": "pi --offline --approve --no-session --list-models openai-codex"

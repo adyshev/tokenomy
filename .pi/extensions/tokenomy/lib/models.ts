@@ -4,7 +4,22 @@ export interface PlanCreditRates {
   output: number;
 }
 
-// ChatGPT plan credit rates published by OpenAI on 2026-07-27.
+// Verified against an authenticated ChatGPT Plus Pi catalog on 2026-07-27.
+// Availability is checked independently from plan-credit rates because preview
+// models can appear before a trustworthy rate is known.
+export const PLUS_MODEL_CATALOG_VERIFIED_AT = "2026-07-27";
+export const KNOWN_PLUS_MODELS = [
+  "gpt-5.3-codex-spark",
+  "gpt-5.4",
+  "gpt-5.4-mini",
+  "gpt-5.5",
+  "gpt-5.6-luna",
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+] as const;
+
+// ChatGPT plan credit rates verified on 2026-07-27. Models without a verified
+// rate remain discoverable but are not selected by the default economy tiers.
 export const PLAN_CREDIT_RATE_CARD_VERSION = "2026-07-27";
 export const PLAN_CREDIT_RATES: Record<string, PlanCreditRates> = {
   "gpt-5.6-sol": { input: 125, cacheRead: 12.5, output: 750 },
@@ -23,3 +38,12 @@ export const DEFAULT_MODEL_TIERS = {
   medium: ["gpt-5.6-terra", "gpt-5.4", "gpt-5.4-mini"],
   complex: ["gpt-5.6-sol", "gpt-5.5", "gpt-5.6-terra"],
 } as const;
+
+export function rateCardAgeDays(
+  version: string,
+  now = new Date(),
+): number | undefined {
+  const timestamp = Date.parse(`${version}T00:00:00Z`);
+  if (!Number.isFinite(timestamp)) return undefined;
+  return Math.max(0, (now.getTime() - timestamp) / (24 * 60 * 60 * 1000));
+}

@@ -13,9 +13,8 @@ spend without changing the final user prompt.
 - ChatGPT Plus Codex access authenticated in Pi (the live-tested setup)
 - `openai-codex` models available in `pi --list-models openai-codex`
 
-ChatGPT Pro is expected to use the same Codex provider and rate card, but the
-project has not yet run its live evaluation suite on a Pro account. Treat Pro
-compatibility as best-effort until that validation is complete.
+ChatGPT Pro has not been tested and is outside the supported subscription
+scope. It may work, but Tokenomy currently makes no Pro compatibility claim.
 
 ## Install with Pi
 

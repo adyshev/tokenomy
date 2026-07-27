@@ -2,8 +2,8 @@
 
 Tokenomy is a token-economy layer for Pi users working with Codex through a
 ChatGPT Plus subscription. Its shipped defaults and live evaluation are focused
-on Plus. ChatGPT Pro uses the same Codex model and credit infrastructure and is
-expected to work, but it has not yet been validated by the project.
+on Plus. ChatGPT Pro has not been tested and is outside the currently supported
+subscription scope; the project makes no Pro compatibility claim.
 
 This package is a **Pi extension**, not a native OpenAI Codex CLI extension.
 It depends on Pi's extension lifecycle and uses Pi's `openai-codex` provider.
@@ -63,7 +63,10 @@ likely to cost more through retries, excessive tool calls, or incorrect edits.
   completion/tool-error proxies, verified user feedback, correction signals,
   evaluator scores, tool-output measurements, and measured compaction savings.
 - Provides `/tokenomy dashboard` with 7/30-day trends, budgets, quality
-  evidence, mode comparisons, and quota-adapter status.
+  evidence, per-tier spend, estimated remaining turns, mode comparisons, and
+  quota-adapter status.
+- Offers project-local data inventory and selective purge commands without
+  removing configuration.
 - Supports deterministic opt-in economy-mode experiments with no-cost shadow
   tier decisions.
 - Routes English, Ukrainian, Russian, Spanish, French, German, and Portuguese
@@ -86,11 +89,12 @@ Tokenomy's shipped defaults remain focused on one well-defined setup:
 
 - Pi users authenticated with ChatGPT Plus Codex access. This is Tokenomy's
   primary, live-tested setup.
-- ChatGPT Pro is expected to be compatible with the same Codex provider and
-  rate card, but remains unvalidated and best-effort until it passes the live
-  evaluation suite.
+- ChatGPT Pro is untested and unsupported for now. It may work, but users
+  should not infer compatibility from the Plus results.
 - The `openai-codex` model family exposed by Pi. Other providers are supported
-  through provider-qualified model IDs and an explicit allowlist.
+  only as an experimental configuration surface through provider-qualified
+  model IDs and an explicit allowlist; the project does not ship or test their
+  routing tiers or rate cards.
 - Project-local routing through `.pi/extensions/tokenomy/index.ts`.
 - Local-only memory, cache, telemetry, and compression. No external database or
   external memory API is used.
@@ -186,6 +190,12 @@ Useful commands inside Pi:
 /tokenomy debug path
 /tokenomy debug purge
 /tokenomy debug off
+/tokenomy data
+/tokenomy data purge cache
+/tokenomy data purge telemetry
+/tokenomy data purge memory
+/tokenomy data purge debug
+/tokenomy data purge all
 /tokenomy doctor
 ```
 
@@ -216,8 +226,11 @@ can see them; it is not an account-wide quota report.
 `/tokenomy debug on` starts an opt-in local JSONL trace for debugging
 Tokenomy decisions. Payload fields are redacted by default; set
 `debug.redact` to `false` only for a deliberate raw capture.
+`/tokenomy data` inventories every project-local Tokenomy state file and its
+size. `/tokenomy data purge cache|telemetry|memory|debug|all` removes only the
+selected class; `all` asks for confirmation and preserves configuration.
 `/tokenomy doctor` checks configuration, configured models, private storage,
-the bundled schema, and the rate card.
+the bundled schema, and rate-card freshness.
 
 ## Live evaluation
 
@@ -243,8 +256,12 @@ TOKENOMY_ECON_EVAL=1 npm run test:economic
 ```
 
 This uses paired fresh workspaces with counterbalanced execution order,
-requires both outputs to pass the same task checks, and reports measured token
-and estimated plan-credit deltas. It consumes real Plus quota.
+requires an explicit quality non-inferiority gate, and reports measured token
+and estimated plan-credit deltas. The smoke profile runs five cases once. Use
+`TOKENOMY_ECON_PROFILE=full` for the 30-case corpus (three repeats by default),
+`TOKENOMY_ECON_ARMS=baseline,router,full` to include the live classifier, and
+`TOKENOMY_ECON_MANIFEST=/path/scenarios.json` for real-repository fixtures. It
+consumes real Plus quota.
 
 Routing decision notifications are enabled by default so you can see when
 Tokenomy switches models. To disable them, set `ui.notifyDecisions` to `false`
@@ -428,6 +445,13 @@ Default Codex model preferences are:
 - simple: `gpt-5.4-mini`, then `gpt-5.6-luna`
 - medium: `openai-codex/gpt-5.6-terra`
 - complex: `openai-codex/gpt-5.6-sol`
+
+The authenticated Plus catalog checked on 2026-07-27 also exposed
+`gpt-5.3-codex-spark`. Tokenomy records it in the known catalog but does not
+route to it by default because no verified plan-credit rate is bundled.
+`npm run test:catalog` compares the current authenticated Pi catalog with these
+defaults and fails when a configured model disappears or the rate card is
+stale.
 
 If you want the fallback selection to be smarter than string sorting, Tokenomy uses explicit model-family ranking rather than relying on IDs.
 
