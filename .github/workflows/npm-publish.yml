@@ -36,6 +36,12 @@ jobs:
       - name: Run tests
         run: npm test
 
+      - name: Typecheck against supported Pi API
+        run: npm run typecheck
+
+      - name: Test packed npm installation
+        run: npm run test:package
+
       - name: Read package metadata
         id: package
         run: |
@@ -84,12 +90,6 @@ jobs:
           fi
           npm publish "${publish_args[@]}"
 
-      - name: Sync default npm dist tag
-        if: steps.npm-token.outputs.configured == 'true'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm dist-tag add "${{ steps.package.outputs.name }}@${{ steps.package.outputs.version }}" latest
-
       - name: Skip missing npm token
         if: steps.published.outputs.exists == 'false' && steps.npm-token.outputs.configured == 'false'
         run: |
@@ -104,7 +104,15 @@ jobs:
         if: steps.published.outputs.exists == 'true' || steps.npm-token.outputs.configured == 'true'
         run: |
           expected="${{ steps.package.outputs.version }}"
-          actual="$(npm view "${{ steps.package.outputs.name }}@$expected" version)"
+          actual=""
+          for attempt in 1 2 3 4 5 6; do
+            actual="$(npm view "${{ steps.package.outputs.name }}@$expected" version 2>/dev/null || true)"
+            if [[ "$actual" = "$expected" ]]; then
+              break
+            fi
+            echo "npm has not propagated $expected yet (attempt $attempt/6)"
+            sleep $((attempt * 10))
+          done
           test "$actual" = "$expected"
           echo "published=true" >> "$GITHUB_OUTPUT"
 
@@ -130,8 +138,14 @@ jobs:
           VERSION: ${{ steps.package.outputs.version }}
         run: |
           tag="v$VERSION"
-          if gh release view "$tag" >/dev/null 2>&1; then
-            gh release edit "$tag" --latest --title "$tag"
+          prerelease_args=()
+          if [[ "$VERSION" == *-* ]]; then
+            prerelease_args+=(--prerelease)
           else
-            gh release create "$tag" --verify-tag --generate-notes --latest --title "$tag"
+            prerelease_args+=(--latest)
+          fi
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release edit "$tag" "${prerelease_args[@]}" --title "$tag"
+          else
+            gh release create "$tag" --verify-tag --generate-notes "${prerelease_args[@]}" --title "$tag"
           fi

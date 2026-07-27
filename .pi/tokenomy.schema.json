@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/adyshev/tokenomy/blob/main/.pi/tokenomy.schema.json",
+  "title": "Tokenomy for Pi configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "enabled": { "type": "boolean" },
+    "mode": { "enum": ["save", "balanced", "quality"] },
+    "provider": { "type": "string", "minLength": 1 },
+    "models": { "$ref": "#/$defs/modelTiers" },
+    "thinking": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "simple": { "$ref": "#/$defs/thinking" },
+        "medium": { "$ref": "#/$defs/thinking" },
+        "complex": { "$ref": "#/$defs/thinking" }
+      }
+    },
+    "classifier": { "$ref": "#/$defs/object" },
+    "planCredits": { "$ref": "#/$defs/object" },
+    "quality": { "$ref": "#/$defs/object" },
+    "experiments": { "$ref": "#/$defs/object" },
+    "providers": { "$ref": "#/$defs/object" },
+    "registry": { "$ref": "#/$defs/object" },
+    "quota": { "$ref": "#/$defs/object" },
+    "budgets": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sessionCredits": { "type": "number", "minimum": 0 },
+        "dailyCredits": { "type": "number", "minimum": 0 },
+        "warnAtPercent": { "type": "number", "exclusiveMinimum": 0, "maximum": 100 },
+        "policy": { "enum": ["warn", "save", "ask"] }
+      }
+    },
+    "cache": { "$ref": "#/$defs/object" },
+    "telemetry": { "$ref": "#/$defs/object" },
+    "contextEconomy": { "$ref": "#/$defs/object" },
+    "memory": { "$ref": "#/$defs/object" },
+    "distillation": { "$ref": "#/$defs/object" },
+    "adaptive": { "$ref": "#/$defs/object" },
+    "routing": { "$ref": "#/$defs/object" },
+    "thresholds": { "$ref": "#/$defs/object" },
+    "tools": { "$ref": "#/$defs/object" },
+    "toolEconomy": { "$ref": "#/$defs/object" },
+    "languages": { "$ref": "#/$defs/object" },
+    "debug": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "dryRun": { "type": "boolean" },
+        "trace": { "type": "boolean" },
+        "verbose": { "type": "boolean" },
+        "retentionDays": { "type": "number", "minimum": 1 },
+        "redact": { "type": "boolean" }
+      }
+    },
+    "promptDiscipline": { "$ref": "#/$defs/object" },
+    "promptSimplification": { "$ref": "#/$defs/object" },
+    "ui": { "$ref": "#/$defs/object" }
+  },
+  "$defs": {
+    "modelList": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "modelTiers": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "classifier": { "$ref": "#/$defs/modelList" },
+        "simple": { "$ref": "#/$defs/modelList" },
+        "medium": { "$ref": "#/$defs/modelList" },
+        "complex": { "$ref": "#/$defs/modelList" }
+      }
+    },
+    "thinking": {
+      "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
+    },
+    "object": {
+      "type": "object"
+    }
+  }
+}

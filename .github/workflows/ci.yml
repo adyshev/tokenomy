@@ -10,8 +10,12 @@ on:
 
 jobs:
   test:
-    name: Node tests
-    runs-on: ubuntu-latest
+    name: Node tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
 
     steps:
       - name: Check out repository
@@ -33,3 +37,6 @@ jobs:
 
       - name: Run tests
         run: npm test
+
+      - name: Test packed npm installation
+        run: npm run test:package

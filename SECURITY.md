@@ -65,11 +65,17 @@ response is size-limited and schema-validated before it replaces the local
 rate-card file.
 
 If `debug.trace` is explicitly enabled, Tokenomy writes a local JSONL debug
-trace under `.pi/tokenomy-cache/debug/session-*.jsonl`. This trace may include
-raw prompts, model/tool outputs exposed to Tokenomy, classifier prompts and
-responses, memory context, compression data, routing decisions, and internal
-errors. Tokenomy shows a warning when debug trace starts. Do not enable it in a
-sensitive project unless storing that raw session data locally is acceptable.
+trace under `.pi/tokenomy-cache/debug/session-*.jsonl`. Payload fields are
+redacted by default. Setting `debug.redact` to `false` may record raw prompts,
+model/tool outputs, classifier prompts/responses, memory context, compression
+data, routing decisions, and internal errors. Trace files use mode `0600` and
+cache directories use `0700` where POSIX permissions are supported. Old traces
+expire after `debug.retentionDays`; `/tokenomy debug purge` removes them now.
+
+JSON state files use a per-file lock and atomic rename so a crash cannot leave
+a partially written document. Stale locks are recovered. This protects file
+integrity across concurrent Pi processes; last-completed-write semantics still
+apply when two processes update the same project state at nearly the same time.
 
 Prompt-shape analysis uses the local `compromise` NLP library. It does not send
 prompt text to an external service.

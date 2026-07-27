@@ -7,6 +7,10 @@ Tokenomy reads config from two places and merges them in order:
 
 Project config wins over global config.
 
+The bundled `.pi/tokenomy.schema.json` can be associated with either file in
+an editor. At runtime, malformed values keep the last valid/default value, and
+unknown keys are ignored with a warning. Run `/tokenomy doctor` after changes.
+
 ## Top-Level Options
 
 | Option | Type | Default | Description |
@@ -21,9 +25,9 @@ Project config wins over global config.
 {
   "models": {
     "classifier": ["gpt-5.4-mini"],
-    "simple": ["gpt-5.4-mini"],
-    "medium": ["gpt-5.4", "gpt-5.4-mini"],
-    "complex": ["gpt-5.5", "gpt-5.4"]
+    "simple": ["gpt-5.4-mini", "gpt-5.6-luna", "gpt-5.4"],
+    "medium": ["gpt-5.6-terra", "gpt-5.4", "gpt-5.4-mini"],
+    "complex": ["gpt-5.6-sol", "gpt-5.5", "gpt-5.6-terra"]
   }
 }
 ```
@@ -240,14 +244,17 @@ Do not put credentials or cookies in this file.
   "budgets": {
     "sessionCredits": 0,
     "dailyCredits": 0,
-    "warnAtPercent": 80
+    "warnAtPercent": 80,
+    "policy": "warn"
   }
 }
 ```
 
-Zero disables that budget. Alerts are emitted once per session when the
-measured estimate reaches the configured percentage. They are advisory because
-plan-credit conversion is an estimate.
+Zero disables that budget. `policy` controls later non-high-risk turns:
+`warn` leaves routing unchanged, `save` downshifts one tier, and `ask` asks
+before keeping the recommended tier (and downshifts when declined or when no
+UI is available). High-risk work is never budget-downshifted. Plan-credit
+conversion remains an estimate.
 
 ## Cache
 
@@ -523,7 +530,9 @@ Tokenomy telemetry.
   "debug": {
     "dryRun": false,
     "trace": false,
-    "verbose": false
+    "verbose": false,
+    "retentionDays": 7,
+    "redact": true
   }
 }
 ```
@@ -532,13 +541,11 @@ Tokenomy telemetry.
 level, or active tools.
 
 `trace` writes a local JSONL debug session trace under
-`.pi/tokenomy-cache/debug/session-*.jsonl`. It is disabled by default because
-it may record raw prompts, model/tool outputs exposed to Tokenomy, classifier
-prompts and responses, memory context, compression data, routing decisions, and
-internal errors. Enable it only when you need to debug Tokenomy behavior and are
-comfortable storing that session data locally. You can also toggle it for the
-current session with `/tokenomy debug on`, `/tokenomy debug off`, and
-`/tokenomy debug path`.
+`.pi/tokenomy-cache/debug/session-*.jsonl`. It is disabled by default.
+`redact: true` replaces prompt/output/memory payloads with length markers;
+setting it to `false` enables raw diagnostic capture. Files use private
+permissions where supported and expire after `retentionDays`. Use
+`/tokenomy debug purge` to remove all project traces.
 
 ## Prompt Discipline
 

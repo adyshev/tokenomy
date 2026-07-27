@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.2.0-beta.1 - 2026-07-27
+
+- Updated Plus-tested routing defaults for the current Codex catalog:
+  `gpt-5.4-mini` for classifier/cheapest work, `gpt-5.6-terra` for medium
+  work, and `gpt-5.6-sol` for complex work, with Luna and prior-model
+  fallbacks.
+- Added an opt-in paired economic benchmark that runs identical fresh-workspace
+  tasks through Tokenomy and a fixed model, verifies both outcomes, and records
+  measured token and estimated-credit deltas.
+- Documented the counterbalanced Plus run: all three task pairs verified and
+  39.6% fewer estimated credits in aggregate versus fixed GPT-5.6 Sol; the
+  small-sample limitation is explicit.
+- Added strict pre-merge config type checking, unknown-key warnings, a bundled
+  JSON Schema, and `/tokenomy doctor`.
+- Added actionable `warn`, `save`, and `ask` budget policies while preserving
+  stronger routing for high-risk work.
+- Made local JSON persistence crash-safe with private directories/files,
+  per-file locking, temporary files, atomic rename, and stale-lock recovery.
+- Added private, default-redacted debug traces, retention cleanup, and
+  `/tokenomy debug purge`; raw capture now requires `debug.redact: false`.
+- Split config, current model policy, and local persistence out of the main
+  extension module.
+- Added installed-tarball smoke tests and Linux/macOS CI coverage.
+- Fixed release channels: prereleases publish only under npm `beta` and become
+  GitHub prereleases; stable releases alone move `latest`. npm propagation is
+  retried before creating a tag and release.
+- Clarified throughout the package that Tokenomy is a Plus-tested Pi extension,
+  not a native Codex CLI extension, and documented explicit beta exit criteria.
+- Expanded the mocked integration suite from 73 to 83 tests.
+
 ## 0.1.25-beta - 2026-07-27
 
 - Added verified `success|partial|failure` feedback, multilingual correction

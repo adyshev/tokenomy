@@ -7,13 +7,17 @@ Tokenomy currently targets a narrow environment by design.
 - Pi packages `@earendil-works/pi-ai` and
   `@earendil-works/pi-coding-agent` version `0.82.x` (typechecked against
   `0.82.1`)
-- `pi install npm:tokenomy-pi`
+- `pi install npm:tokenomy-pi@beta` for the current prerelease
 - `pi install https://github.com/adyshev/tokenomy`
 - Node.js 22.19 or newer
 - ChatGPT Plus Codex authenticated in Pi (live-tested)
 - Pi `openai-codex` provider
+- Tokenomy is a Pi extension; native OpenAI Codex CLI hooks are not supported
 - Provider-qualified custom tier lists for other Pi providers
 - Default model IDs:
+  - `gpt-5.6-sol`
+  - `gpt-5.6-terra`
+  - `gpt-5.6-luna`
   - `gpt-5.4-mini`
   - `gpt-5.4`
   - `gpt-5.5`
@@ -56,7 +60,8 @@ change active tools.
 - automatic install/update across multiple projects
 - automatic personal ChatGPT/Codex quota retrieval (validated user/companion
   snapshots are supported)
-- causal savings claims without a sufficiently controlled experiment
+- account-wide causal savings claims; the paired benchmark provides
+  task-level evidence against a fixed baseline, not universal performance
 
 ## Telemetry Compatibility
 

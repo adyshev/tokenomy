@@ -5,6 +5,9 @@ ChatGPT Plus subscription. Its shipped defaults and live evaluation are focused
 on Plus. ChatGPT Pro uses the same Codex model and credit infrastructure and is
 expected to work, but it has not yet been validated by the project.
 
+This package is a **Pi extension**, not a native OpenAI Codex CLI extension.
+It depends on Pi's extension lifecycle and uses Pi's `openai-codex` provider.
+
 Tokenomy is designed to reduce total token spend during normal project work
 without forcing you to manually choose a model for every prompt.
 
@@ -103,10 +106,13 @@ for Codex models available to ChatGPT Plus users through Pi.
 ## Files
 
 - `.pi/extensions/tokenomy/index.ts` — Pi extension implementation
+- `.pi/extensions/tokenomy/lib/` — storage, config, and model-policy modules
 - `.pi/tokenomy.json` — project configuration
+- `.pi/tokenomy.schema.json` — editor/validation schema
 - `INSTALL.md` — install and update instructions
 - `CONFIG.md` — full configuration reference
 - `LIMITATIONS.md` — known limitations and beta caveats
+- `EVALUATION.md` — reproducible methodology and latest signed-in evidence
 - `SECURITY.md` — security and stored-data notes
 - `CONTRIBUTING.md` — development and release checklist
 
@@ -115,13 +121,13 @@ for Codex models available to ChatGPT Plus users through Pi.
 See `INSTALL.md` for full setup steps. The short version is:
 
 ```bash
-pi install npm:tokenomy-pi
+pi install npm:tokenomy-pi@beta
 ```
 
 For project-local install:
 
 ```bash
-pi install -l npm:tokenomy-pi
+pi install -l npm:tokenomy-pi@beta
 ```
 
 Then authenticate Codex in Pi and start Pi from the target project.
@@ -178,7 +184,9 @@ Useful commands inside Pi:
 /tokenomy dry-run off
 /tokenomy debug on
 /tokenomy debug path
+/tokenomy debug purge
 /tokenomy debug off
+/tokenomy doctor
 ```
 
 `/tokenomy status` shows the current routing state, last decision, accounting
@@ -205,8 +213,11 @@ can see them; it is not an account-wide quota report.
 `/tokenomy export-report` shows the local telemetry rollup file path.
 `/tokenomy reset-stats` clears local lifetime counters.
 `/tokenomy reset-history` clears local routing history.
-`/tokenomy debug on` starts an opt-in raw local JSONL trace for debugging
-Tokenomy decisions, and `/tokenomy debug off` stops it.
+`/tokenomy debug on` starts an opt-in local JSONL trace for debugging
+Tokenomy decisions. Payload fields are redacted by default; set
+`debug.redact` to `false` only for a deliberate raw capture.
+`/tokenomy doctor` checks configuration, configured models, private storage,
+the bundled schema, and the rate card.
 
 ## Live evaluation
 
@@ -224,6 +235,16 @@ tasks, and writes routing/usage evidence to
 `TOKENOMY_LIVE_EVAL_OUTPUT=/path/evidence.json` to choose the artifact path.
 The manual `Live Tokenomy Evaluation` workflow runs the same suite only on a
 self-hosted runner that is already signed in to Pi.
+
+For a controlled comparison against one fixed model, run:
+
+```bash
+TOKENOMY_ECON_EVAL=1 npm run test:economic
+```
+
+This uses paired fresh workspaces with counterbalanced execution order,
+requires both outputs to pass the same task checks, and reports measured token
+and estimated plan-credit deltas. It consumes real Plus quota.
 
 Routing decision notifications are enabled by default so you can see when
 Tokenomy switches models. To disable them, set `ui.notifyDecisions` to `false`
@@ -392,8 +413,8 @@ Edit `.pi/tokenomy.json`. See `CONFIG.md` for every option.
 Safer defaults for sharing:
 - `tools.manage` is `false` unless you opt in
 - `debug.dryRun` lets you see routing without changing model/tool state
-- `debug.trace` is disabled by default because it records raw session data for
-  debugging
+- `debug.trace` is disabled by default; enabled traces are redacted by default,
+  retained for seven days, and stored with private permissions
 - `promptSimplification.enabled` reduces classifier prompt size for large logs
 - `promptSimplification.compressionEnabled` controls local `tokenshrink`
   compression and defaults to `true`
@@ -403,9 +424,10 @@ Safer defaults for sharing:
 
 Default Codex model preferences are:
 
-- classifier/simple: `openai-codex/gpt-5.4-mini`
-- medium: `openai-codex/gpt-5.4`
-- complex: `openai-codex/gpt-5.5`
+- classifier: `openai-codex/gpt-5.4-mini`
+- simple: `gpt-5.4-mini`, then `gpt-5.6-luna`
+- medium: `openai-codex/gpt-5.6-terra`
+- complex: `openai-codex/gpt-5.6-sol`
 
 If you want the fallback selection to be smarter than string sorting, Tokenomy uses explicit model-family ranking rather than relying on IDs.
 
@@ -425,13 +447,15 @@ optimized for debugging routing decisions and feature interactions:
 ```bash
 /tokenomy debug on
 /tokenomy debug path
+/tokenomy debug purge
 /tokenomy debug off
 ```
 
-The trace is stored as JSONL in `.pi/tokenomy-cache/debug/session-*.jsonl` and
-includes ordered events with short summaries plus structured data for input
-analysis, classifier prompts/results, routing, memory, telemetry, model
-restoration, captured agent outputs, and the active session/config snapshot.
+The trace is stored as JSONL in `.pi/tokenomy-cache/debug/session-*.jsonl`.
+Sensitive payload fields are redacted by default, files are private (`0600`
+where supported), and traces older than `debug.retentionDays` are removed at
+session start. Set `debug.redact: false` only for raw local diagnostics and
+purge them afterward.
 
 This is intentionally off by default. When enabled, Tokenomy shows a warning
 because the trace may include raw prompts, model/tool outputs exposed to

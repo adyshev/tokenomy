@@ -3,6 +3,12 @@
 Tokenomy is beta software. It is useful today, but the routing policy is still
 heuristic and should be treated as advisory rather than perfect.
 
+The beta label remains appropriate for the 0.2 line because the GPT-5.6 policy,
+enforcing budgets, atomic storage, and paired benchmark are new. Graduate to a
+stable release after repeated Plus live/paired runs across representative
+repositories, a compatibility window across Pi releases, and no open data-loss
+or high-risk routing defects.
+
 ## Codex-Focused Defaults
 
 The default config targets Pi's `openai-codex` provider and the Codex model IDs
@@ -99,6 +105,9 @@ pi --list-models openai-codex
 Tokenomy can be installed as a Pi package from npm or git. Project-specific
 config still lives in `.pi/tokenomy.json`.
 
+It is not a native OpenAI Codex CLI extension. Reusing the routing policy in
+Codex itself requires a separate integration against Codex-supported hooks.
+
 ## Test Environment
 
 Normal tests use a mocked Pi runtime and local Pi package resolution. They verify
@@ -107,3 +116,7 @@ aggregation, and state restoration. They do not perform live model calls,
 personal account-limit integration, or terminal UI assertions. The separate
 `TOKENOMY_LIVE_EVAL=1 npm run test:live` suite performs signed-in model calls
 and consumes real quota; it is never run by normal CI.
+
+`TOKENOMY_ECON_EVAL=1 npm run test:economic` adds a paired fresh-workspace,
+counterbalanced-order comparison against one fixed model. Both outputs use the
+same checks, but the small fixture set is evidence, not a universal claim.
