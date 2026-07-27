@@ -43,11 +43,37 @@ selected agent model. Compression can still theoretically affect routing if the
 classifier interprets the compacted excerpt differently, so it can be disabled
 with `promptSimplification.compressionEnabled: false`.
 
-## Estimated Savings
+## Usage and Plan Credits
 
-Token savings are estimates. Tokenomy does not read provider billing data or
-exact hidden reasoning usage. The lifetime counter is useful for directionality,
-not accounting.
+Tokenomy records provider-reported usage from Pi's `agent_end` messages:
+input, cached input, cache writes, output, optional reasoning, total tokens,
+requests, and Pi-reported cost. A settled turn with no usable provider data is
+marked `unavailable` instead of being estimated from prompt characters.
+
+The ChatGPT plan-credit conversion is still an estimate. It uses a versioned
+local copy of the OpenAI Codex rate card, which can be overridden in config,
+and may become stale when OpenAI changes plan pricing or model IDs. Reports
+cover only Tokenomy turns in the current Pi project; they are not account-wide
+quota or billing reports. `/tokenomy limits` can only show recognized response
+headers exposed to this Pi process, so it may be unavailable or incomplete.
+
+Telemetry created before schema version 2 may contain model-rank-based
+`estimatedTokensSaved` and cost-unit fields. These are retained for migration
+but labeled as legacy proxies, never as measured tokens or credits.
+
+## Quality Measurement
+
+Tokenomy records a completion proxy from Pi stop reasons, tool errors, and retry
+runs. This supports cost-per-completed-turn monitoring, but it is not an
+independent task-success evaluation and cannot prove that a cheaper route
+preserved quality. User-rated or evaluator-backed success measurement remains
+required before making causal savings claims.
+
+## Context Compaction
+
+Automatic compaction is disabled by default. Compaction saves future context
+tokens but is lossy, so users should review the task-preservation instructions
+before enabling `contextEconomy.autoCompact`.
 
 ## Model Availability
 
@@ -66,5 +92,6 @@ config still lives in `.pi/tokenomy.json`.
 ## Test Environment
 
 Tests use a mocked Pi runtime and local Pi package resolution. They verify
-routing logic, but they do not perform live model calls or end-to-end terminal
-UI assertions.
+routing logic, current `agent_end`/`agent_settled` behavior, measured usage
+aggregation, and state restoration. They do not perform live model calls,
+account-limit integration, or end-to-end terminal UI assertions.

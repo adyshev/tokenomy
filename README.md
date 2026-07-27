@@ -35,21 +35,28 @@ likely to cost more through retries, excessive tool calls, or incorrect edits.
 - Upshifts complex, risky, debug, architecture, and release prompts.
 - Detects prompt shape locally with `compromise`, including
   question/action/mixed prompts and concrete multi-step action requests.
-- Restores the pre-route model after each prompt when Tokenomy temporarily
-  downshifts or upshifts.
+- Preserves the user's startup model, then restores both the pre-route model
+  and thinking level after each fully settled prompt.
 - Uses a confidence threshold before trusting classifier decisions.
+- Applies a per-session classifier budget and a conservative break-even check,
+  so routing does not spend more estimated credits than it can plausibly save.
+- Offers `save`, `balanced`, and `quality` economy modes.
 - Falls back conservatively when routing confidence is too low.
 - Learns local project memory such as package names, test commands, important
   files, and release workflow hints.
-- Injects compact advisory memory only when it is likely to save repeated
-  discovery.
+- Keeps memory injection and routing-digest injection opt-in so the default
+  system-prompt prefix stays cache-friendly.
 - Simplifies and compresses large classifier prompts so routing itself stays
   cheap.
 - Rejects compression when protected signal lines would be rewritten or dropped.
-- Tracks local telemetry for routing decisions, estimated savings, memory use,
-  and compression guard activity.
-- Builds daily, monthly, and lifetime telemetry rollups so savings claims can
-  be checked from local data instead of guesswork.
+- Measures provider-reported input, cached-input, cache-write, output,
+  reasoning, total-token, request, and cost usage after each turn.
+- Builds daily, monthly, and lifetime telemetry rollups with explicit
+  measured/unavailable coverage, configurable plan-credit estimates,
+  completion/tool-error proxies, and compaction counts.
+- Shows recognized provider limit headers when available, with explicit
+  project/process scope.
+- Supports manual task-preserving compaction and opt-in threshold compaction.
 
 Tokenomy does not rewrite the final prompt sent to the selected agent model.
 Memory and compression are routing/context optimizations only, and the current
@@ -119,6 +126,9 @@ Useful commands inside Pi:
 /tokenomy
 /tokenomy off
 /tokenomy on
+/tokenomy mode save
+/tokenomy mode balanced
+/tokenomy mode quality
 /tokenomy reload
 /tokenomy explain
 /tokenomy history
@@ -127,6 +137,8 @@ Useful commands inside Pi:
 /tokenomy report 30d
 /tokenomy report month
 /tokenomy report lifetime
+/tokenomy limits
+/tokenomy compact
 /tokenomy memory
 /tokenomy memory show
 /tokenomy memory refresh
@@ -144,11 +156,17 @@ Useful commands inside Pi:
 /tokenomy debug off
 ```
 
-`/tokenomy status` shows the current routing state, last decision, and estimated tokens saved vs not using Tokenomy.
+`/tokenomy status` shows the current routing state, last decision, accounting
+mode, and the plan rate-card version.
 `/tokenomy explain` shows the signals and reason for the last routing decision.
 `/tokenomy history` shows recent prompt-safe routing telemetry.
-`/tokenomy report` shows a 30-day local telemetry report with estimated savings percentage, route distribution, memory/cache/compression contribution, and fallback/guard counts.
+`/tokenomy report` shows a 30-day local telemetry report with measured token
+usage, cache-read ratio, estimated plan credits, completion/tool-error proxies,
+route distribution, and fallback/guard counts.
 Use `/tokenomy report 7d`, `/tokenomy report 30d`, `/tokenomy report month`, or `/tokenomy report lifetime` for specific periods.
+`/tokenomy limits` shows the latest recognized provider limit headers when Pi
+can see them; it is not an account-wide quota report.
+`/tokenomy compact` triggers task-preserving context compaction.
 `/tokenomy memory` shows local project memory status.
 `/tokenomy memory show` shows stored project facts.
 `/tokenomy export-history` shows the local routing history file path.
@@ -179,9 +197,10 @@ Tokenomy considers total token usage, not just model cost:
 - unnecessary tool calls
 - retry risk from underpowered routing
 
-On startup, Tokenomy selects the configured complex baseline model first
-(`gpt-5.5` by default), then reroutes down to cheaper models when the prompt is
-simple or low-risk enough to use fallback.
+On startup, Tokenomy preserves the model already selected by the user. It
+selects the configured complex model only when Pi starts without any current
+model. Each turn records the pre-route model as its baseline without claiming
+that a different model would necessarily have consumed the same tokens.
 
 For simple prompts it prefers the cheapest/fastest configured Codex model, minimal thinking, concise answers, and no tools when tools are unnecessary.
 
@@ -258,19 +277,20 @@ Tokenomy uses fallback. Fallback is risk-aware:
 This policy keeps cheap fallback for basic uncertainty while avoiding expensive
 retries on risky prompts.
 
-For large or repeated project contexts, Tokenomy can also inject a compact
-project digest from `.pi/tokenomy-cache/project-digest.json`. The digest stores
+When explicitly enabled, Tokenomy can inject a compact digest for large or
+repeated project contexts from `.pi/tokenomy-cache/project-digest.json`. The digest stores
 routing metadata such as intent counts and last route, not prompt text or model
-responses.
+responses. Digest injection defaults to off because its changing content can
+reduce exact-prefix prompt-cache reuse.
 
 Tokenomy also keeps local per-project memory in
-`.pi/tokenomy-cache/project-memory.json`. Memory is enabled and injected by
-default. It stores short durable project facts such as package name, test
-commands, important implementation files, and release workflow hints. Memory is
+`.pi/tokenomy-cache/project-memory.json`. Memory learning is enabled, while
+prompt injection defaults to off. It stores short durable project facts such as
+package names, test commands, important implementation files, and release
+workflow hints. Memory is
 advisory: the current user prompt always overrides it. Tokenomy injects memory
-only when it is likely to save repeated discovery, for example release/debug
-work, vague project prompts, or large contexts. It does not store raw prompts or
-model responses.
+only after `memory.inject` is enabled and the turn is likely to save repeated
+discovery. It does not store raw prompts or model responses.
 
 For large prompts that need classifier help, Tokenomy locally simplifies the
 classifier prompt first. It keeps head/tail context and signal lines such as
@@ -289,29 +309,31 @@ Tokenomy also adjusts thinking level by tier:
 - `medium`: low thinking
 - `complex`: medium thinking
 
-After a prompt finishes, Tokenomy restores the model that was selected before
-the routing decision, as long as the current model still matches the model
-Tokenomy selected. If the model changed during execution, Tokenomy leaves it
-alone. This keeps cheap-model choices from leaking into the next prompt.
+After `agent_settled`, Tokenomy restores the model and thinking level selected
+before routing. Each value is restored only if it still matches the value
+Tokenomy selected; explicit changes made during execution are preserved.
 
-Decision notifications show the selected tier, source, model, thinking level,
-and estimated token savings. Tokenomy does not write a main Pi footer/status
+Decision notifications show the selected tier, source, model, and thinking
+level. Tokenomy does not write a main Pi footer/status
 entry because Pi renders plugin footers in shared terminal space and long
 entries can crowd other extensions. Use `/tokenomy status` for the current
-routing state and lifetime estimated savings stored locally in
+routing state and accounting contract. Legacy pre-v2 proxy counters remain in
 `.pi/tokenomy-stats.json`.
 Recent routing decisions are stored locally in
 `.pi/tokenomy-cache/routing-history.json` when telemetry is enabled. Telemetry
-stores prompt hashes, routing metadata, compression guard status, and estimated
-savings, not raw prompt text.
+stores prompt hashes, routing metadata, compression guard status, measured
+usage, and estimated plan credits—not raw prompt text.
 Longer-term telemetry is stored in
 `.pi/tokenomy-cache/telemetry-rollups.json` as daily, monthly, and lifetime
-prompt-safe aggregates. Rollups include estimated baseline cost units,
-estimated routed cost units, estimated savings, route distribution, classifier
-cache hits, memory savings estimates, compression savings estimates, adaptive
-fallbacks, prompt-shape distribution, action-count distribution, multi-step
-prompt counts, and compression guard rejections. These rollups are the main
-local evidence source for checking whether Tokenomy is saving tokens over time.
+prompt-safe aggregates. Rollups include exact provider-reported token
+categories, cache-read ratio inputs, request counts, Pi-reported cost,
+rate-card-based plan-credit estimates, classifier overhead, route distribution,
+adaptive fallbacks, prompt shape, and compression guard rejections. Historical
+non-zero `estimatedTokensSaved`/cost-unit fields are labeled as pre-v2 model-rank
+proxies and are never presented as tokens or credits.
+
+Reports cover only this Pi project. They do not claim to represent total
+account-wide ChatGPT or Codex usage.
 
 ## Configuration
 
@@ -325,8 +347,9 @@ Safer defaults for sharing:
 - `promptSimplification.enabled` reduces classifier prompt size for large logs
 - `promptSimplification.compressionEnabled` controls local `tokenshrink`
   compression and defaults to `true`
-- `memory.enabled` and `memory.inject` control local project memory and both
-  default to `true`
+- `memory.enabled` defaults to `true`; `memory.inject` defaults to `false` for
+  prompt-cache stability
+- `distillation.enabled` defaults to `false` for the same reason
 
 Default Codex model preferences are:
 
@@ -383,8 +406,8 @@ npm test
 ```
 
 The tests use Node's built-in test runner and a mocked Pi runtime. They verify
-that Tokenomy starts on the configured complex baseline model, downshifts for a
-simple prompt, upshifts again for a complex prompt, uses risk-aware fallback,
-reuses classifier cache entries, injects compact project digests for large
-contexts, learns local project memory, records telemetry, and rejects unsafe
-classifier prompt compression.
+startup model preservation, current Pi lifecycle events, model/thinking
+restoration after settle, exact usage aggregation, plan-credit conversion,
+explicit unavailable status, stable default system additions, model routing,
+classifier caching, opt-in memory/digest injection, and classifier-compression
+guards.

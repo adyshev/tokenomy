@@ -20,8 +20,16 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 type Tier = "simple" | "medium" | "complex";
+type EconomyMode = "save" | "balanced" | "quality";
 type ToolProfile = "none" | "read" | "write";
-type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+type ThinkingLevel =
+  | "off"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max";
 type PromptIntent =
   | "answer"
   | "shell_simple"
@@ -33,11 +41,13 @@ type PromptIntent =
   | "local_workflow"
   | "release";
 type RiskLevel = "low" | "medium" | "high";
+type TurnOutcome = "completed" | "failed" | "aborted" | "unknown";
 
 type ModelSpec = string;
 
 interface TokenomyConfig {
   enabled: boolean;
+  mode: EconomyMode;
   provider: string;
   models: {
     classifier: ModelSpec[];
@@ -51,7 +61,14 @@ interface TokenomyConfig {
     onlyWhenAmbiguous: boolean;
     maxPromptChars: number;
     maxEstimatedClassifierTokens: number;
+    maxCallsPerSession: number;
+    minEstimatedNetCredits: number;
     minConfidence: number;
+  };
+  planCredits: {
+    enabled: boolean;
+    rateCardVersion: string;
+    rates: Record<string, CreditRates>;
   };
   cache: {
     enabled: boolean;
@@ -63,6 +80,13 @@ interface TokenomyConfig {
     enabled: boolean;
     maxEntries: number;
     rollupRetentionDays: number;
+  };
+  contextEconomy: {
+    autoCompact: boolean;
+    compactAtPercent: number;
+    minTokens: number;
+    cooldownTurns: number;
+    customInstructions: string;
   };
   memory: {
     enabled: boolean;
@@ -86,6 +110,7 @@ interface TokenomyConfig {
   };
   routing: {
     restoreModelAfterPrompt: boolean;
+    restoreThinkingAfterPrompt: boolean;
   };
   thresholds: {
     largeContextTokens: number;
@@ -133,10 +158,12 @@ interface PromptShape {
   signals: string[];
 }
 
-interface PendingModelRestore {
-  restoreModel: Model<Api>;
-  restoreLabel: string;
-  selectedLabel: string;
+interface PendingStateRestore {
+  restoreModel?: Model<Api>;
+  restoreLabel?: string;
+  selectedLabel?: string;
+  restoreThinking: ThinkingLevel;
+  selectedThinking: ThinkingLevel;
 }
 
 interface DebugTrace {
@@ -256,6 +283,17 @@ interface RoutingHistoryEntry {
   memoryReason?: string;
   memoryFactsUsed?: number;
   memoryEstimatedTokensSaved?: number;
+  baselineModel?: string;
+  usageStatus?: "pending" | "measured" | "unavailable";
+  measuredAt?: string;
+  usage?: UsageTotals;
+  classifierUsage?: UsageTotals;
+  estimatedPlanCredits?: number;
+  outcome?: TurnOutcome;
+  stopReason?: string;
+  toolCalls?: number;
+  toolErrors?: number;
+  retryRuns?: number;
 }
 
 interface RoutingHistory {
@@ -282,10 +320,37 @@ interface TelemetryRollupBucket {
   promptShapes: Record<string, number>;
   actionCounts: Record<string, number>;
   models: Record<string, number>;
+  turnsMeasured: number;
+  turnsUsageUnavailable: number;
+  requests: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  reasoningTokens: number;
+  totalTokens: number;
+  costUsd: number;
+  estimatedPlanCredits: number;
+  classifierInputTokens: number;
+  classifierOutputTokens: number;
+  classifierCacheReadTokens: number;
+  classifierCacheWriteTokens: number;
+  classifierReasoningTokens: number;
+  classifierTotalTokens: number;
+  classifierCostUsd: number;
+  classifierEstimatedPlanCredits: number;
+  completedTurns: number;
+  failedTurns: number;
+  abortedTurns: number;
+  unknownOutcomeTurns: number;
+  toolCalls: number;
+  toolErrors: number;
+  retryRuns: number;
+  compactions: number;
 }
 
 interface TelemetryRollups {
-  version: 1;
+  version: 2;
   updatedAt: string;
   lifetime: TelemetryRollupBucket;
   daily: Record<string, TelemetryRollupBucket>;
@@ -299,6 +364,48 @@ interface ClassifierPromptTelemetry {
   guardMissingLines: number;
   tokensSaved: number;
   requiredLines: number;
+}
+
+interface UsageTotals {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  reasoning: number;
+  totalTokens: number;
+  costUsd: number;
+  requests: number;
+}
+
+interface CreditRates {
+  input: number;
+  cacheRead: number;
+  output: number;
+  cacheWrite?: number;
+}
+
+interface PendingTurnTelemetry {
+  historyId: string;
+  startedAt: string;
+  baselineModel?: string;
+  selectedModel?: string;
+  classifierUsage?: UsageTotals;
+  classifierEstimatedPlanCredits?: number;
+  agentEndCount: number;
+  usageRecorded: boolean;
+  lastStopReason?: string;
+  toolCalls: number;
+  toolErrors: number;
+}
+
+interface AccountLimitSnapshot {
+  version: 1;
+  scope: "provider-response-headers";
+  note: string;
+  provider?: string;
+  status: number;
+  updatedAt: string;
+  headers: Record<string, string>;
 }
 
 type MemoryFactSource = "observed" | "config" | "package" | "workflow";
@@ -347,8 +454,25 @@ const BUILTIN_TOOL_NAMES = new Set([
   "ls",
 ]);
 
+// ChatGPT plan credit rates published by OpenAI on 2026-07-27.
+// Values are credits per one million tokens. Keep this table versioned and
+// treat the result as an estimate: provider-reported tokens are measured, but
+// OpenAI can change the plan rate card independently of this package.
+const PLAN_CREDIT_RATE_CARD_VERSION = "2026-07-27";
+const PLAN_CREDIT_RATES: Record<string, CreditRates> = {
+  "gpt-5.6-sol": { input: 125, cacheRead: 12.5, output: 750 },
+  "gpt-5.6-terra": { input: 62.5, cacheRead: 6.25, output: 375 },
+  "gpt-5.6-luna": { input: 25, cacheRead: 2.5, output: 150 },
+  "gpt-5.5": { input: 125, cacheRead: 12.5, output: 750 },
+  "gpt-5.4": { input: 62.5, cacheRead: 6.25, output: 375 },
+  "gpt-5.4-mini": { input: 18.75, cacheRead: 1.875, output: 113 },
+  "gpt-5.3-codex": { input: 43.75, cacheRead: 4.375, output: 350 },
+  "gpt-5.2-codex": { input: 43.75, cacheRead: 4.375, output: 350 },
+};
+
 const DEFAULT_CONFIG: TokenomyConfig = {
   enabled: true,
+  mode: "balanced",
   provider: "openai-codex",
   models: {
     classifier: ["gpt-5.4-mini"],
@@ -366,7 +490,14 @@ const DEFAULT_CONFIG: TokenomyConfig = {
     onlyWhenAmbiguous: true,
     maxPromptChars: 4000,
     maxEstimatedClassifierTokens: 1400,
+    maxCallsPerSession: 12,
+    minEstimatedNetCredits: 0.01,
     minConfidence: 0.95,
+  },
+  planCredits: {
+    enabled: true,
+    rateCardVersion: PLAN_CREDIT_RATE_CARD_VERSION,
+    rates: PLAN_CREDIT_RATES,
   },
   cache: {
     enabled: true,
@@ -379,9 +510,17 @@ const DEFAULT_CONFIG: TokenomyConfig = {
     maxEntries: 200,
     rollupRetentionDays: 400,
   },
+  contextEconomy: {
+    autoCompact: false,
+    compactAtPercent: 85,
+    minTokens: 80_000,
+    cooldownTurns: 8,
+    customInstructions:
+      "Preserve the active task, decisions, modified files, validation results, blockers, and exact next steps. Drop repeated logs and superseded exploration.",
+  },
   memory: {
     enabled: true,
-    inject: true,
+    inject: false,
     maxFacts: 80,
     maxInjectedChars: 1200,
     maxFactChars: 240,
@@ -389,7 +528,7 @@ const DEFAULT_CONFIG: TokenomyConfig = {
     minContextTokensForInjection: 20_000,
   },
   distillation: {
-    enabled: true,
+    enabled: false,
     minContextTokens: 80_000,
     repeatPromptThreshold: 3,
     maxDigestChars: 1200,
@@ -401,6 +540,7 @@ const DEFAULT_CONFIG: TokenomyConfig = {
   },
   routing: {
     restoreModelAfterPrompt: true,
+    restoreThinkingAfterPrompt: true,
   },
   thresholds: {
     largeContextTokens: 80_000,
@@ -629,6 +769,10 @@ function telemetryRollupsPath(cwd: string): string {
   return join(cacheDir(cwd), "telemetry-rollups.json");
 }
 
+function accountLimitsPath(cwd: string): string {
+  return join(cacheDir(cwd), "account-limits.json");
+}
+
 function debugTraceDir(cwd: string): string {
   return join(cacheDir(cwd), "debug");
 }
@@ -639,6 +783,129 @@ function projectMemoryPath(cwd: string): string {
 
 function safeInt(value: unknown): number {
   return typeof value === "number" ? Math.max(0, Math.round(value)) : 0;
+}
+
+function safeAmount(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, value)
+    : 0;
+}
+
+function emptyUsageTotals(): UsageTotals {
+  return {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    reasoning: 0,
+    totalTokens: 0,
+    costUsd: 0,
+    requests: 0,
+  };
+}
+
+function usageTotalsFrom(value: unknown): UsageTotals | undefined {
+  if (!isObject(value)) return undefined;
+  const hasTokenField = [
+    value.input,
+    value.output,
+    value.cacheRead,
+    value.cacheWrite,
+    value.totalTokens,
+  ].some((item) => typeof item === "number");
+  if (!hasTokenField) return undefined;
+  const cost = isObject(value.cost) ? value.cost : undefined;
+  const requests = safeInt(value.requests);
+  return {
+    input: safeInt(value.input),
+    output: safeInt(value.output),
+    cacheRead: safeInt(value.cacheRead),
+    cacheWrite: safeInt(value.cacheWrite),
+    reasoning: safeInt(value.reasoning),
+    totalTokens: safeInt(value.totalTokens),
+    costUsd: safeAmount(value.costUsd ?? cost?.total),
+    requests: requests > 0 ? requests : 1,
+  };
+}
+
+function addUsageTotals(target: UsageTotals, source: UsageTotals): void {
+  target.input += source.input;
+  target.output += source.output;
+  target.cacheRead += source.cacheRead;
+  target.cacheWrite += source.cacheWrite;
+  target.reasoning += source.reasoning;
+  target.totalTokens += source.totalTokens;
+  target.costUsd += source.costUsd;
+  target.requests += source.requests;
+}
+
+function modelIdFromLabel(label: string | undefined): string | undefined {
+  if (!label) return undefined;
+  return label.split("/").pop()?.toLowerCase();
+}
+
+function estimatePlanCredits(
+  usage: UsageTotals | undefined,
+  model: string | undefined,
+  config: TokenomyConfig,
+): number | undefined {
+  if (!usage || !config.planCredits.enabled) return undefined;
+  const modelId = modelIdFromLabel(model);
+  const rates = modelId ? config.planCredits.rates[modelId] : undefined;
+  if (!rates) return undefined;
+  const credits =
+    usage.input * rates.input +
+    usage.cacheRead * rates.cacheRead +
+    usage.output * rates.output +
+    usage.cacheWrite * (rates.cacheWrite ?? rates.input);
+  return credits / 1_000_000;
+}
+
+function measuredAgentUsage(event: unknown, config: TokenomyConfig): {
+  usage?: UsageTotals;
+  estimatedPlanCredits?: number;
+  outputText?: string;
+} {
+  if (!isObject(event) || !Array.isArray(event.messages)) return {};
+  const usage = emptyUsageTotals();
+  let estimatedPlanCredits = 0;
+  let hasCredits = false;
+  const output: string[] = [];
+  for (const message of event.messages) {
+    if (!isObject(message) || message.role !== "assistant") continue;
+    const messageUsage = usageTotalsFrom(message.usage);
+    if (messageUsage) {
+      addUsageTotals(usage, messageUsage);
+      const credits = estimatePlanCredits(
+        messageUsage,
+        typeof message.model === "string" ? message.model : undefined,
+        config,
+      );
+      if (credits !== undefined) {
+        estimatedPlanCredits += credits;
+        hasCredits = true;
+      }
+    }
+    const text = getText(message);
+    if (text) output.push(text);
+  }
+  return {
+    usage: usage.requests > 0 ? usage : undefined,
+    estimatedPlanCredits: hasCredits ? estimatedPlanCredits : undefined,
+    outputText: output.join("\n") || undefined,
+  };
+}
+
+function lastAssistantStopReason(event: unknown): string | undefined {
+  if (!isObject(event) || !Array.isArray(event.messages)) return undefined;
+  return event.messages
+    .filter(
+      (message): message is Record<string, unknown> =>
+        isObject(message) &&
+        message.role === "assistant" &&
+        typeof message.stopReason === "string",
+    )
+    .at(-1)?.stopReason as string | undefined;
 }
 
 function loadPromptShape(value: unknown): PromptShape {
@@ -774,12 +1041,39 @@ function emptyRollupBucket(): TelemetryRollupBucket {
     promptShapes: {},
     actionCounts: {},
     models: {},
+    turnsMeasured: 0,
+    turnsUsageUnavailable: 0,
+    requests: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    reasoningTokens: 0,
+    totalTokens: 0,
+    costUsd: 0,
+    estimatedPlanCredits: 0,
+    classifierInputTokens: 0,
+    classifierOutputTokens: 0,
+    classifierCacheReadTokens: 0,
+    classifierCacheWriteTokens: 0,
+    classifierReasoningTokens: 0,
+    classifierTotalTokens: 0,
+    classifierCostUsd: 0,
+    classifierEstimatedPlanCredits: 0,
+    completedTurns: 0,
+    failedTurns: 0,
+    abortedTurns: 0,
+    unknownOutcomeTurns: 0,
+    toolCalls: 0,
+    toolErrors: 0,
+    retryRuns: 0,
+    compactions: 0,
   };
 }
 
 function emptyRollups(): TelemetryRollups {
   return {
-    version: 1,
+    version: 2,
     updatedAt: "",
     lifetime: emptyRollupBucket(),
     daily: {},
@@ -818,6 +1112,35 @@ function loadRollupBucket(value: unknown): TelemetryRollupBucket {
     promptShapes: safeNumberMap(value.promptShapes),
     actionCounts: safeNumberMap(value.actionCounts),
     models: safeNumberMap(value.models),
+    turnsMeasured: safeInt(value.turnsMeasured),
+    turnsUsageUnavailable: safeInt(value.turnsUsageUnavailable),
+    requests: safeInt(value.requests),
+    inputTokens: safeInt(value.inputTokens),
+    outputTokens: safeInt(value.outputTokens),
+    cacheReadTokens: safeInt(value.cacheReadTokens),
+    cacheWriteTokens: safeInt(value.cacheWriteTokens),
+    reasoningTokens: safeInt(value.reasoningTokens),
+    totalTokens: safeInt(value.totalTokens),
+    costUsd: safeAmount(value.costUsd),
+    estimatedPlanCredits: safeAmount(value.estimatedPlanCredits),
+    classifierInputTokens: safeInt(value.classifierInputTokens),
+    classifierOutputTokens: safeInt(value.classifierOutputTokens),
+    classifierCacheReadTokens: safeInt(value.classifierCacheReadTokens),
+    classifierCacheWriteTokens: safeInt(value.classifierCacheWriteTokens),
+    classifierReasoningTokens: safeInt(value.classifierReasoningTokens),
+    classifierTotalTokens: safeInt(value.classifierTotalTokens),
+    classifierCostUsd: safeAmount(value.classifierCostUsd),
+    classifierEstimatedPlanCredits: safeAmount(
+      value.classifierEstimatedPlanCredits,
+    ),
+    completedTurns: safeInt(value.completedTurns),
+    failedTurns: safeInt(value.failedTurns),
+    abortedTurns: safeInt(value.abortedTurns),
+    unknownOutcomeTurns: safeInt(value.unknownOutcomeTurns),
+    toolCalls: safeInt(value.toolCalls),
+    toolErrors: safeInt(value.toolErrors),
+    retryRuns: safeInt(value.retryRuns),
+    compactions: safeInt(value.compactions),
   };
 }
 
@@ -834,7 +1157,7 @@ function loadTelemetryRollups(cwd: string): TelemetryRollups {
   const parsed = loadJson(telemetryRollupsPath(cwd));
   if (!isObject(parsed)) return emptyRollups();
   return {
-    version: 1,
+    version: 2,
     updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : "",
     lifetime: loadRollupBucket(parsed.lifetime),
     daily: loadRollupBuckets(parsed.daily),
@@ -868,7 +1191,7 @@ function saveTelemetryRollups(
     Object.entries(rollups.monthly).sort(([a], [b]) => b.localeCompare(a)),
   );
   const next: TelemetryRollups = {
-    version: 1,
+    version: 2,
     updatedAt: now.toISOString(),
     lifetime: rollups.lifetime,
     daily,
@@ -876,6 +1199,56 @@ function saveTelemetryRollups(
   };
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+}
+
+function isLimitHeader(name: string): boolean {
+  const lower = name.toLowerCase();
+  return (
+    lower === "retry-after" ||
+    /^x-ratelimit-(limit|remaining|reset)-(requests|tokens)$/.test(lower) ||
+    /^(x-)?(openai|codex)-[^ ]*(usage|limit|remaining|reset)/.test(lower)
+  );
+}
+
+function saveAccountLimitSnapshot(
+  cwd: string,
+  status: number,
+  headers: Record<string, string>,
+  provider: string | undefined,
+): AccountLimitSnapshot | undefined {
+  const safeHeaders = Object.fromEntries(
+    Object.entries(headers)
+      .filter(([name, value]) => isLimitHeader(name) && !/[\r\n]/.test(value))
+      .map(([name, value]) => [name.toLowerCase(), value.slice(0, 160)]),
+  );
+  if (!Object.keys(safeHeaders).length) return undefined;
+  const snapshot: AccountLimitSnapshot = {
+    version: 1,
+    scope: "provider-response-headers",
+    note:
+      "These are the latest limit-related headers visible to this Pi process. Availability varies by provider and they are not a complete ChatGPT/Codex account ledger.",
+    provider,
+    status,
+    updatedAt: new Date().toISOString(),
+    headers: safeHeaders,
+  };
+  const path = accountLimitsPath(cwd);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
+  return snapshot;
+}
+
+function loadAccountLimitSnapshot(cwd: string): AccountLimitSnapshot | undefined {
+  const parsed = loadJson(accountLimitsPath(cwd));
+  if (
+    !isObject(parsed) ||
+    parsed.version !== 1 ||
+    parsed.scope !== "provider-response-headers" ||
+    !isObject(parsed.headers)
+  ) {
+    return undefined;
+  }
+  return parsed as unknown as AccountLimitSnapshot;
 }
 
 function loadProjectMemory(cwd: string): ProjectMemory {
@@ -1294,6 +1667,13 @@ function updateProjectDigest(
 
 function validateConfig(config: TokenomyConfig): string[] {
   const warnings: string[] = [];
+  if (
+    config.mode !== "save" &&
+    config.mode !== "balanced" &&
+    config.mode !== "quality"
+  ) {
+    warnings.push("mode must be save, balanced, or quality");
+  }
   const modelGroups: Array<[string, ModelSpec[]]> = [
     ["classifier", config.models.classifier],
     ["simple", config.models.simple],
@@ -1324,6 +1704,40 @@ function validateConfig(config: TokenomyConfig): string[] {
     warnings.push("classifier.minConfidence must be a number from 0 to 1");
   }
   if (
+    typeof config.classifier.maxCallsPerSession !== "number" ||
+    config.classifier.maxCallsPerSession < 0
+  ) {
+    warnings.push("classifier.maxCallsPerSession must be non-negative");
+  }
+  if (
+    typeof config.classifier.minEstimatedNetCredits !== "number" ||
+    config.classifier.minEstimatedNetCredits < 0
+  ) {
+    warnings.push("classifier.minEstimatedNetCredits must be non-negative");
+  }
+  if (typeof config.planCredits.enabled !== "boolean") {
+    warnings.push("planCredits.enabled must be a boolean");
+  }
+  if (
+    typeof config.planCredits.rateCardVersion !== "string" ||
+    !config.planCredits.rateCardVersion.trim()
+  ) {
+    warnings.push("planCredits.rateCardVersion must be a non-empty string");
+  }
+  for (const [model, rates] of Object.entries(config.planCredits.rates)) {
+    if (
+      !isObject(rates) ||
+      typeof rates.input !== "number" ||
+      typeof rates.cacheRead !== "number" ||
+      typeof rates.output !== "number" ||
+      rates.input < 0 ||
+      rates.cacheRead < 0 ||
+      rates.output < 0
+    ) {
+      warnings.push(`planCredits.rates.${model} is invalid`);
+    }
+  }
+  if (
     typeof config.cache.classifierTtlMs !== "number" ||
     config.cache.classifierTtlMs < 0
   ) {
@@ -1337,6 +1751,9 @@ function validateConfig(config: TokenomyConfig): string[] {
   }
   if (typeof config.routing.restoreModelAfterPrompt !== "boolean") {
     warnings.push("routing.restoreModelAfterPrompt must be a boolean");
+  }
+  if (typeof config.routing.restoreThinkingAfterPrompt !== "boolean") {
+    warnings.push("routing.restoreThinkingAfterPrompt must be a boolean");
   }
   if (typeof config.telemetry.enabled !== "boolean") {
     warnings.push("telemetry.enabled must be a boolean");
@@ -1352,6 +1769,25 @@ function validateConfig(config: TokenomyConfig): string[] {
     config.telemetry.rollupRetentionDays < 30
   ) {
     warnings.push("telemetry.rollupRetentionDays must be at least 30");
+  }
+  if (
+    typeof config.contextEconomy.compactAtPercent !== "number" ||
+    config.contextEconomy.compactAtPercent < 50 ||
+    config.contextEconomy.compactAtPercent > 100
+  ) {
+    warnings.push("contextEconomy.compactAtPercent must be from 50 to 100");
+  }
+  if (
+    typeof config.contextEconomy.minTokens !== "number" ||
+    config.contextEconomy.minTokens < 0
+  ) {
+    warnings.push("contextEconomy.minTokens must be non-negative");
+  }
+  if (
+    typeof config.contextEconomy.cooldownTurns !== "number" ||
+    config.contextEconomy.cooldownTurns < 0
+  ) {
+    warnings.push("contextEconomy.cooldownTurns must be non-negative");
   }
   if (typeof config.memory.enabled !== "boolean") {
     warnings.push("memory.enabled must be a boolean");
@@ -2289,6 +2725,8 @@ async function classifyWithCheapModel(
       promptTelemetry: ClassifierPromptTelemetry;
       classifierPromptText: string;
       classifierResponseText: string;
+      usage?: UsageTotals;
+      estimatedPlanCredits?: number;
     }
   | undefined
 > {
@@ -2346,6 +2784,12 @@ async function classifyWithCheapModel(
     promptTelemetry: classifierPrompt.telemetry,
     classifierPromptText: classifierPrompt.text,
     classifierResponseText: text,
+    usage: usageTotalsFrom(response.usage),
+    estimatedPlanCredits: estimatePlanCredits(
+      usageTotalsFrom(response.usage),
+      classifier.id,
+      config,
+    ),
   };
 }
 
@@ -2360,10 +2804,14 @@ function fallbackTierFor(
   stats: TokenomyStats,
 ): Tier {
   if (!config.adaptive.enabled) return "simple";
+  if (config.mode === "save" && analysis.risk === "low") return "simple";
   // Low-risk uncertainty stays cheap; risky uncertainty moves up because a bad
   // cheap attempt can cost more total tokens through retries and corrections.
   if (config.adaptive.complexFallbackIntents.includes(analysis.intent)) {
     return "complex";
+  }
+  if (config.mode === "quality") {
+    return analysis.risk === "high" ? "complex" : "medium";
   }
   if (riskAtLeast(analysis.risk, config.adaptive.mediumFallbackMinRisk)) {
     return "medium";
@@ -2416,12 +2864,16 @@ function recordRoutingHistory(
   sessionEstimatedTokensSaved: number,
   classifierPromptTelemetry: ClassifierPromptTelemetry | undefined,
   memoryInjection: MemoryInjection | undefined,
+  baselineModel: string | undefined,
   config: TokenomyConfig,
-): void {
-  if (!config.telemetry.enabled) return;
+): string | undefined {
+  if (!config.telemetry.enabled) return undefined;
   const history = loadRoutingHistory(cwd);
+  const id = hashText(
+    `${Date.now()}\n${normalizedPrompt(prompt)}\n${decision.tier}`,
+  );
   const entry: RoutingHistoryEntry = {
-    id: hashText(`${Date.now()}\n${normalizedPrompt(prompt)}\n${decision.tier}`),
+    id,
     at: new Date().toISOString(),
     promptHash: hashText(normalizedPrompt(prompt)),
     promptChars: prompt.length,
@@ -2453,8 +2905,11 @@ function recordRoutingHistory(
     memoryReason: memoryInjection?.reason,
     memoryFactsUsed: memoryInjection?.factsUsed,
     memoryEstimatedTokensSaved: memoryInjection?.estimatedTokensSaved,
+    baselineModel,
+    usageStatus: "pending",
   };
   saveRoutingHistory(cwd, { entries: [entry, ...history.entries] }, config);
+  return id;
 }
 
 function incrementCounter(map: Record<string, number>, key: string | undefined): void {
@@ -2540,6 +2995,214 @@ function recordTelemetryRollup(
       classifierPromptTelemetry,
       memoryInjection,
     );
+  }
+  saveTelemetryRollups(cwd, rollups, config);
+}
+
+function addMeasuredUsageToBucket(
+  bucket: TelemetryRollupBucket,
+  usage: UsageTotals | undefined,
+  estimatedPlanCredits: number | undefined,
+  classifierUsage: UsageTotals | undefined,
+  classifierEstimatedPlanCredits: number | undefined,
+  firstMeasuredUsage: boolean,
+): void {
+  if (usage) {
+    if (firstMeasuredUsage) bucket.turnsMeasured += 1;
+    bucket.requests += usage.requests;
+    bucket.inputTokens += usage.input;
+    bucket.outputTokens += usage.output;
+    bucket.cacheReadTokens += usage.cacheRead;
+    bucket.cacheWriteTokens += usage.cacheWrite;
+    bucket.reasoningTokens += usage.reasoning;
+    bucket.totalTokens += usage.totalTokens;
+    bucket.costUsd += usage.costUsd;
+    bucket.estimatedPlanCredits += estimatedPlanCredits ?? 0;
+  }
+  if (classifierUsage) {
+    bucket.classifierInputTokens += classifierUsage.input;
+    bucket.classifierOutputTokens += classifierUsage.output;
+    bucket.classifierCacheReadTokens += classifierUsage.cacheRead;
+    bucket.classifierCacheWriteTokens += classifierUsage.cacheWrite;
+    bucket.classifierReasoningTokens += classifierUsage.reasoning;
+    bucket.classifierTotalTokens += classifierUsage.totalTokens;
+    bucket.classifierCostUsd += classifierUsage.costUsd;
+    bucket.classifierEstimatedPlanCredits +=
+      classifierEstimatedPlanCredits ?? 0;
+  }
+}
+
+function updateMeasuredTelemetry(
+  cwd: string,
+  pending: PendingTurnTelemetry,
+  event: unknown,
+  config: TokenomyConfig,
+): { usage?: UsageTotals; outputText?: string } {
+  const measured = measuredAgentUsage(event, config);
+  const firstAgentEnd = pending.agentEndCount === 0;
+  const firstMeasuredUsage = !!measured.usage && !pending.usageRecorded;
+  const classifierUsage = firstAgentEnd ? pending.classifierUsage : undefined;
+  const classifierEstimatedPlanCredits = firstAgentEnd
+    ? pending.classifierEstimatedPlanCredits
+    : undefined;
+
+  if (config.telemetry.enabled) {
+    const history = loadRoutingHistory(cwd);
+    const entry = history.entries.find((item) => item.id === pending.historyId);
+    if (entry) {
+      if (measured.usage) {
+        const accumulated = usageTotalsFrom(entry.usage) ?? emptyUsageTotals();
+        addUsageTotals(accumulated, measured.usage);
+        entry.usage = accumulated;
+        entry.usageStatus = "measured";
+        entry.measuredAt = new Date().toISOString();
+      }
+      if (classifierUsage) entry.classifierUsage = classifierUsage;
+      const credits =
+        (entry.estimatedPlanCredits ?? 0) +
+        (measured.estimatedPlanCredits ?? 0) +
+        (classifierEstimatedPlanCredits ?? 0);
+      if (credits > 0) entry.estimatedPlanCredits = credits;
+      saveRoutingHistory(cwd, history, config);
+    }
+
+    const rollups = loadTelemetryRollups(cwd);
+    const day = pending.startedAt.slice(0, 10);
+    const month = pending.startedAt.slice(0, 7);
+    rollups.daily[day] ??= emptyRollupBucket();
+    rollups.monthly[month] ??= emptyRollupBucket();
+    for (const bucket of [
+      rollups.lifetime,
+      rollups.daily[day],
+      rollups.monthly[month],
+    ]) {
+      addMeasuredUsageToBucket(
+        bucket,
+        measured.usage,
+        measured.estimatedPlanCredits,
+        classifierUsage,
+        classifierEstimatedPlanCredits,
+        firstMeasuredUsage,
+      );
+    }
+    saveTelemetryRollups(cwd, rollups, config);
+  }
+
+  pending.agentEndCount += 1;
+  if (measured.usage) pending.usageRecorded = true;
+  pending.lastStopReason =
+    lastAssistantStopReason(event) ?? pending.lastStopReason;
+  return { usage: measured.usage, outputText: measured.outputText };
+}
+
+function markTurnUsageUnavailable(
+  cwd: string,
+  pending: PendingTurnTelemetry,
+  config: TokenomyConfig,
+): void {
+  if (!config.telemetry.enabled || pending.usageRecorded) return;
+  const history = loadRoutingHistory(cwd);
+  const entry = history.entries.find((item) => item.id === pending.historyId);
+  if (entry) {
+    entry.usageStatus = "unavailable";
+    entry.measuredAt = new Date().toISOString();
+    if (pending.classifierUsage) {
+      entry.classifierUsage = pending.classifierUsage;
+      entry.estimatedPlanCredits = pending.classifierEstimatedPlanCredits;
+    }
+    saveRoutingHistory(cwd, history, config);
+  }
+  const rollups = loadTelemetryRollups(cwd);
+  const day = pending.startedAt.slice(0, 10);
+  const month = pending.startedAt.slice(0, 7);
+  rollups.daily[day] ??= emptyRollupBucket();
+  rollups.monthly[month] ??= emptyRollupBucket();
+  for (const bucket of [
+    rollups.lifetime,
+    rollups.daily[day],
+    rollups.monthly[month],
+  ]) {
+    bucket.turnsUsageUnavailable += 1;
+    if (pending.agentEndCount === 0 && pending.classifierUsage) {
+      addMeasuredUsageToBucket(
+        bucket,
+        undefined,
+        undefined,
+        pending.classifierUsage,
+        pending.classifierEstimatedPlanCredits,
+        false,
+      );
+    }
+  }
+  saveTelemetryRollups(cwd, rollups, config);
+}
+
+function turnOutcomeFor(pending: PendingTurnTelemetry): TurnOutcome {
+  if (pending.lastStopReason === "aborted") return "aborted";
+  if (pending.lastStopReason === "error") return "failed";
+  if (
+    pending.lastStopReason === "stop" ||
+    pending.lastStopReason === "length"
+  ) {
+    return "completed";
+  }
+  return "unknown";
+}
+
+function finalizeTurnOutcome(
+  cwd: string,
+  pending: PendingTurnTelemetry,
+  config: TokenomyConfig,
+): void {
+  if (!config.telemetry.enabled) return;
+  const outcome = turnOutcomeFor(pending);
+  const retryRuns = Math.max(0, pending.agentEndCount - 1);
+  const history = loadRoutingHistory(cwd);
+  const entry = history.entries.find((item) => item.id === pending.historyId);
+  if (entry) {
+    entry.outcome = outcome;
+    entry.stopReason = pending.lastStopReason;
+    entry.toolCalls = pending.toolCalls;
+    entry.toolErrors = pending.toolErrors;
+    entry.retryRuns = retryRuns;
+    saveRoutingHistory(cwd, history, config);
+  }
+
+  const rollups = loadTelemetryRollups(cwd);
+  const day = pending.startedAt.slice(0, 10);
+  const month = pending.startedAt.slice(0, 7);
+  rollups.daily[day] ??= emptyRollupBucket();
+  rollups.monthly[month] ??= emptyRollupBucket();
+  for (const bucket of [
+    rollups.lifetime,
+    rollups.daily[day],
+    rollups.monthly[month],
+  ]) {
+    if (outcome === "completed") bucket.completedTurns += 1;
+    else if (outcome === "failed") bucket.failedTurns += 1;
+    else if (outcome === "aborted") bucket.abortedTurns += 1;
+    else bucket.unknownOutcomeTurns += 1;
+    bucket.toolCalls += pending.toolCalls;
+    bucket.toolErrors += pending.toolErrors;
+    bucket.retryRuns += retryRuns;
+  }
+  saveTelemetryRollups(cwd, rollups, config);
+}
+
+function recordCompaction(cwd: string, config: TokenomyConfig): void {
+  if (!config.telemetry.enabled) return;
+  const rollups = loadTelemetryRollups(cwd);
+  const now = new Date().toISOString();
+  const day = now.slice(0, 10);
+  const month = now.slice(0, 7);
+  rollups.daily[day] ??= emptyRollupBucket();
+  rollups.monthly[month] ??= emptyRollupBucket();
+  for (const bucket of [
+    rollups.lifetime,
+    rollups.daily[day],
+    rollups.monthly[month],
+  ]) {
+    bucket.compactions += 1;
   }
   saveTelemetryRollups(cwd, rollups, config);
 }
@@ -2713,6 +3376,121 @@ function shouldUseClassifier(
   return true;
 }
 
+interface ClassifierBudgetDecision {
+  allowed: boolean;
+  reason: string;
+  estimatedClassifierCredits?: number;
+  estimatedGrossSavingsCredits?: number;
+  estimatedNetCredits?: number;
+}
+
+function estimateRequestCredits(
+  model: string | undefined,
+  inputTokens: number,
+  outputTokens: number,
+  config: TokenomyConfig,
+): number | undefined {
+  return estimatePlanCredits(
+    {
+      input: Math.max(0, inputTokens),
+      output: Math.max(0, outputTokens),
+      cacheRead: 0,
+      cacheWrite: 0,
+      reasoning: 0,
+      totalTokens: Math.max(0, inputTokens) + Math.max(0, outputTokens),
+      costUsd: 0,
+      requests: 1,
+    },
+    model,
+    config,
+  );
+}
+
+function classifierBudgetDecision(
+  ctx: ExtensionContext,
+  currentModel: Model<Api> | undefined,
+  contextTokens: number | undefined,
+  analysis: LocalAnalysis,
+  config: TokenomyConfig,
+  callsThisSession: number,
+): ClassifierBudgetDecision {
+  if (callsThisSession >= config.classifier.maxCallsPerSession) {
+    return {
+      allowed: false,
+      reason: `classifier session budget exhausted (${callsThisSession}/${config.classifier.maxCallsPerSession})`,
+    };
+  }
+  if (!config.planCredits.enabled) {
+    return { allowed: true, reason: "plan-credit estimates disabled" };
+  }
+
+  const classifier = findFirstModel(
+    ctx,
+    config.models.classifier,
+    config.provider,
+  );
+  const simple = findFirstModel(ctx, config.models.simple, config.provider);
+  const estimatedClassifierCredits = estimateRequestCredits(
+    modelLabel(classifier),
+    analysis.estimatedClassifierTokens,
+    80,
+    config,
+  );
+  if (
+    contextTokens === undefined ||
+    estimatedClassifierCredits === undefined ||
+    !currentModel ||
+    !simple
+  ) {
+    return {
+      allowed: true,
+      reason: "break-even estimate unavailable",
+      estimatedClassifierCredits,
+    };
+  }
+
+  // A routing choice affects the whole next request. Use a deliberately
+  // conservative 50% realization factor so the classifier runs only when its
+  // likely savings exceed its own estimated credit use by the configured
+  // margin.
+  const estimatedInput = contextTokens + analysis.estimatedClassifierTokens;
+  const assumedOutput = config.mode === "quality" ? 1_000 : 600;
+  const currentCredits = estimateRequestCredits(
+    modelLabel(currentModel),
+    estimatedInput,
+    assumedOutput,
+    config,
+  );
+  const simpleCredits = estimateRequestCredits(
+    modelLabel(simple),
+    estimatedInput,
+    assumedOutput,
+    config,
+  );
+  if (currentCredits === undefined || simpleCredits === undefined) {
+    return {
+      allowed: true,
+      reason: "routing-model rate unavailable",
+      estimatedClassifierCredits,
+    };
+  }
+  const estimatedGrossSavingsCredits =
+    Math.max(0, currentCredits - simpleCredits) * 0.5;
+  const estimatedNetCredits =
+    estimatedGrossSavingsCredits - estimatedClassifierCredits;
+  const allowed =
+    estimatedNetCredits >= config.classifier.minEstimatedNetCredits;
+  return {
+    allowed,
+    reason: allowed
+      ? `estimated net benefit ${formatAmount(estimatedNetCredits)} credits`
+      : `classifier skipped: estimated net ${formatAmount(estimatedNetCredits)} credits below ${formatAmount(config.classifier.minEstimatedNetCredits)}`,
+    estimatedClassifierCredits,
+    estimatedGrossSavingsCredits,
+    estimatedNetCredits,
+  };
+}
+
 function targetToolsFor(
   profile: ToolProfile,
   config: TokenomyConfig,
@@ -2760,14 +3538,13 @@ function applyToolPolicy(
 
 function buildTokenDiscipline(
   decision: RouterDecision,
-  contextTokens: number | undefined,
+  _contextTokens: number | undefined,
   config: TokenomyConfig,
-  savedTokens?: number,
 ): string {
   if (!config.promptDiscipline.enabled) return "";
 
   const common = [
-    `Tokenomy token discipline is active${savedTokens === undefined ? "." : `; estimated saved tokens so far: ${savedTokens}.`}`,
+    "Tokenomy token discipline is active.",
     "Optimize for the fewest total tokens that still produce a high-quality result.",
     "Avoid verbose preambles, repeated summaries, and unnecessary tool calls.",
     "When tools are needed, batch related inspection and read only targeted files/sections.",
@@ -2781,11 +3558,6 @@ function buildTokenDiscipline(
   if (decision.tier === "complex") {
     common.push(
       "Do not under-solve: spend enough reasoning to avoid retries, but keep visible output concise.",
-    );
-  }
-  if ((contextTokens ?? 0) >= config.thresholds.largeContextTokens) {
-    common.push(
-      "Context is large: rely on the most relevant recent facts and avoid re-reading broad context unless necessary.",
     );
   }
   if (config.promptSimplification.enabled) {
@@ -2815,6 +3587,9 @@ function formatRoutingHistoryEntry(entry: RoutingHistoryEntry): string {
     ? `memory:${entry.memoryReason ?? "injected"} facts:${entry.memoryFactsUsed ?? 0} chars:${entry.memoryInjectedChars ?? 0}`
     : "memory:no";
   const shape = `shape:${entry.promptShape.kind} actions:${entry.promptShape.actionCount}${entry.promptShape.multiStep ? " multi-step" : ""}`;
+  const usage = entry.usage
+    ? `usage:${entry.usage.totalTokens} (in:${entry.usage.input} cached:${entry.usage.cacheRead} out:${entry.usage.output})`
+    : `usage:${entry.usageStatus ?? "legacy-unavailable"}`;
   return [
     entry.at,
     `${entry.tier}/${entry.source}`,
@@ -2825,7 +3600,11 @@ function formatRoutingHistoryEntry(entry: RoutingHistoryEntry): string {
     shape,
     `confidence:${confidence}`,
     `ctx:${entry.contextBucket}`,
-    `saved:${entry.estimatedTokensSaved}`,
+    usage,
+    entry.estimatedPlanCredits === undefined
+      ? "credits:n/a"
+      : `credits:${formatAmount(entry.estimatedPlanCredits)}`,
+    `baseline:${entry.baselineModel ?? "unknown"}`,
     `prompt:${entry.promptHash}`,
     compression,
     guard,
@@ -2850,6 +3629,34 @@ function mergeRollupBucket(
   target.adaptiveFallbacks += source.adaptiveFallbacks;
   target.classifierCacheHits += source.classifierCacheHits;
   target.multiStepPrompts += source.multiStepPrompts;
+  target.turnsMeasured += source.turnsMeasured;
+  target.turnsUsageUnavailable += source.turnsUsageUnavailable;
+  target.requests += source.requests;
+  target.inputTokens += source.inputTokens;
+  target.outputTokens += source.outputTokens;
+  target.cacheReadTokens += source.cacheReadTokens;
+  target.cacheWriteTokens += source.cacheWriteTokens;
+  target.reasoningTokens += source.reasoningTokens;
+  target.totalTokens += source.totalTokens;
+  target.costUsd += source.costUsd;
+  target.estimatedPlanCredits += source.estimatedPlanCredits;
+  target.classifierInputTokens += source.classifierInputTokens;
+  target.classifierOutputTokens += source.classifierOutputTokens;
+  target.classifierCacheReadTokens += source.classifierCacheReadTokens;
+  target.classifierCacheWriteTokens += source.classifierCacheWriteTokens;
+  target.classifierReasoningTokens += source.classifierReasoningTokens;
+  target.classifierTotalTokens += source.classifierTotalTokens;
+  target.classifierCostUsd += source.classifierCostUsd;
+  target.classifierEstimatedPlanCredits +=
+    source.classifierEstimatedPlanCredits;
+  target.completedTurns += source.completedTurns;
+  target.failedTurns += source.failedTurns;
+  target.abortedTurns += source.abortedTurns;
+  target.unknownOutcomeTurns += source.unknownOutcomeTurns;
+  target.toolCalls += source.toolCalls;
+  target.toolErrors += source.toolErrors;
+  target.retryRuns += source.retryRuns;
+  target.compactions += source.compactions;
   for (const [key, value] of Object.entries(source.tiers)) {
     target.tiers[key] = (target.tiers[key] ?? 0) + value;
   }
@@ -2907,21 +3714,52 @@ function savingsPercent(bucket: TelemetryRollupBucket): string {
   return `${Math.round((bucket.estimatedTokensSaved / bucket.baselineCostUnits) * 100)}%`;
 }
 
+function cacheReadPercent(bucket: TelemetryRollupBucket): string {
+  const eligible = bucket.inputTokens + bucket.cacheReadTokens;
+  if (eligible <= 0) return "n/a";
+  return `${((bucket.cacheReadTokens / eligible) * 100).toFixed(1)}%`;
+}
+
+function formatAmount(value: number, digits = 4): string {
+  return value.toFixed(digits).replace(/\.?0+$/, "");
+}
+
 function formatTelemetryReport(
   cwd: string,
   label: string,
   bucket: TelemetryRollupBucket,
   rollups: TelemetryRollups,
+  config: TokenomyConfig,
 ): string {
+  const totalCredits =
+    bucket.estimatedPlanCredits + bucket.classifierEstimatedPlanCredits;
+  const toolErrorRate =
+    bucket.toolCalls > 0
+      ? `${((bucket.toolErrors / bucket.toolCalls) * 100).toFixed(1)}%`
+      : "n/a";
   return [
     `Tokenomy telemetry report (${label})`,
+    "Scope: this Pi project only; not total ChatGPT/Codex account usage",
     `Prompts routed: ${bucket.prompts}`,
-    `Estimated savings: ${bucket.estimatedTokensSaved} token-equivalent units (${savingsPercent(bucket)})`,
-    `Estimated baseline cost units: ${bucket.baselineCostUnits}`,
-    `Estimated routed cost units: ${bucket.actualCostUnits}`,
-    `Classifier tokens estimated: ${bucket.classifierTokens}`,
-    `Memory savings estimate: ${bucket.memoryEstimatedTokensSaved}`,
-    `Compression savings estimate: ${bucket.compressionTokensSaved}`,
+    `Usage coverage: ${bucket.turnsMeasured} measured, ${bucket.turnsUsageUnavailable} unavailable`,
+    `Agent tokens: input ${bucket.inputTokens}, cached input ${bucket.cacheReadTokens}, cache write ${bucket.cacheWriteTokens}, output ${bucket.outputTokens}, reasoning subset ${bucket.reasoningTokens}, total ${bucket.totalTokens}`,
+    `Agent requests: ${bucket.requests}`,
+    `Input cache-read ratio: ${cacheReadPercent(bucket)}`,
+    `Classifier tokens: input ${bucket.classifierInputTokens}, cached input ${bucket.classifierCacheReadTokens}, output ${bucket.classifierOutputTokens}, total ${bucket.classifierTotalTokens}`,
+    `Estimated plan credits: ${formatAmount(totalCredits)} (rate card ${config.planCredits.rateCardVersion})`,
+    `Completion proxy: ${bucket.completedTurns} completed, ${bucket.failedTurns} failed, ${bucket.abortedTurns} aborted, ${bucket.unknownOutcomeTurns} unknown`,
+    `Estimated credits per completed turn: ${bucket.completedTurns > 0 ? formatAmount(totalCredits / bucket.completedTurns) : "n/a"} (completion proxy, not independently verified task success)`,
+    `Tool outcomes: ${bucket.toolCalls} calls, ${bucket.toolErrors} errors (${toolErrorRate}); retry runs: ${bucket.retryRuns}`,
+    `Compactions: ${bucket.compactions}`,
+    `Pi-reported cost: $${formatAmount(bucket.costUsd + bucket.classifierCostUsd, 6)}`,
+    ...(bucket.estimatedTokensSaved > 0 ||
+    bucket.baselineCostUnits > 0 ||
+    bucket.actualCostUnits > 0
+      ? [
+          `Legacy pre-v2 proxy: ${bucket.estimatedTokensSaved} model-rank units (${savingsPercent(bucket)}); not tokens or credits`,
+        ]
+      : []),
+    `Classifier prompt compression estimate: ${bucket.compressionTokensSaved} tokens`,
     `Memory injections: ${bucket.memoryInjections}`,
     `Classifier cache hits: ${bucket.classifierCacheHits}`,
     `Adaptive fallbacks: ${bucket.adaptiveFallbacks}`,
@@ -2986,28 +3824,54 @@ function formatMemoryFact(fact: ProjectMemoryFact): string {
   return `${fact.id} | ${fact.kind}/${fact.source}/${fact.confidence} | uses:${fact.uses} | ${fact.text}`;
 }
 
-async function restoreModelIfPending(
-  pendingRestore: PendingModelRestore | undefined,
+async function restoreStateIfPending(
+  pendingRestore: PendingStateRestore | undefined,
   pi: ExtensionAPI,
   ctx: ExtensionContext,
+  config: TokenomyConfig,
   trace?: DebugTrace,
 ): Promise<undefined> {
   if (!pendingRestore) return undefined;
-  const currentLabel = modelLabel(ctx.model);
-  if (currentLabel !== pendingRestore.selectedLabel) {
-    traceEvent(trace, "model.restore.skipped", "current model changed before restore", {
-      currentLabel,
-      pendingRestore,
-    });
-    return undefined;
+  const restored: string[] = [];
+  if (
+    config.routing.restoreModelAfterPrompt &&
+    pendingRestore.restoreModel &&
+    pendingRestore.restoreLabel &&
+    pendingRestore.selectedLabel
+  ) {
+    const currentLabel = modelLabel(ctx.model);
+    if (currentLabel === pendingRestore.selectedLabel) {
+      const ok = await pi.setModel(pendingRestore.restoreModel);
+      traceEvent(trace, "model.restore.done", ok ? `restored ${pendingRestore.restoreLabel}` : `restore failed ${pendingRestore.restoreLabel}`, {
+        ok,
+        pendingRestore,
+      });
+      if (ok) restored.push(`model -> ${pendingRestore.restoreLabel}`);
+    } else {
+      traceEvent(trace, "model.restore.skipped", "current model changed before restore", {
+        currentLabel,
+        pendingRestore,
+      });
+    }
   }
-  const ok = await pi.setModel(pendingRestore.restoreModel);
-  traceEvent(trace, "model.restore.done", ok ? `restored ${pendingRestore.restoreLabel}` : `restore failed ${pendingRestore.restoreLabel}`, {
-    ok,
-    pendingRestore,
-  });
-  if (ctx.hasUI) {
-    ctx.ui.notify(`Tokenomy restored model -> ${pendingRestore.restoreLabel}`, "info");
+
+  if (config.routing.restoreThinkingAfterPrompt) {
+    const currentThinking = pi.getThinkingLevel();
+    if (currentThinking === pendingRestore.selectedThinking) {
+      pi.setThinkingLevel(pendingRestore.restoreThinking);
+      restored.push(`thinking -> ${pendingRestore.restoreThinking}`);
+      traceEvent(trace, "thinking.restore.done", `restored ${pendingRestore.restoreThinking}`, {
+        pendingRestore,
+      });
+    } else {
+      traceEvent(trace, "thinking.restore.skipped", "thinking level changed before restore", {
+        currentThinking,
+        pendingRestore,
+      });
+    }
+  }
+  if (restored.length && ctx.hasUI) {
+    ctx.ui.notify(`Tokenomy restored ${restored.join(", ")}`, "info");
   }
   return undefined;
 }
@@ -3017,12 +3881,15 @@ export default function tokenomy(pi: ExtensionAPI) {
   let lastDecision: RouterDecision | undefined;
   let configWarnings: string[] = [];
   let baselineModel: string | undefined;
-  let estimatedTokensSaved = 0;
   let stats: TokenomyStats = emptyStats();
   let statsWarning: string | undefined;
   let statsSessionRecorded = false;
-  let pendingModelRestore: PendingModelRestore | undefined;
+  let pendingStateRestore: PendingStateRestore | undefined;
+  let pendingTurnTelemetry: PendingTurnTelemetry | undefined;
   let debugTrace: DebugTrace | undefined;
+  let classifierCallsThisSession = 0;
+  let turnsSinceCompaction = 0;
+  let compactionInProgress = false;
 
   pi.registerFlag("tokenomy-off", {
     description: "Disable the Tokenomy token-saving router for this run",
@@ -3030,21 +3897,107 @@ export default function tokenomy(pi: ExtensionAPI) {
     default: false,
   });
 
-  const restoreAfterAgent = async (event: unknown, ctx: ExtensionContext) => {
-    const outputText = extractEventText(event);
+  pi.on("agent_end", (event, ctx) => {
+    const measured = pendingTurnTelemetry
+      ? updateMeasuredTelemetry(ctx.cwd, pendingTurnTelemetry, event, config)
+      : measuredAgentUsage(event, config);
+    const outputText = measured.outputText ?? extractEventText(event);
     traceEvent(debugTrace, "agent.output", outputText ? "agent output captured" : "agent output unavailable", {
       rawOutput: outputText,
       rawEvent: event,
       outputCaptureAvailable: !!outputText,
+      measuredUsage: measured.usage,
     });
-    const pending = pendingModelRestore;
-    pendingModelRestore = undefined;
-    await restoreModelIfPending(pending, pi, ctx, debugTrace);
-  };
+  });
 
-  pi.on("after_agent_end", restoreAfterAgent);
-  pi.on("after_agent_finish", restoreAfterAgent);
-  pi.on("after_agent_complete", restoreAfterAgent);
+  pi.on("tool_execution_end", (event) => {
+    if (!pendingTurnTelemetry) return;
+    pendingTurnTelemetry.toolCalls += 1;
+    if (event.isError) pendingTurnTelemetry.toolErrors += 1;
+  });
+
+  pi.on("after_provider_response", (event, ctx) => {
+    try {
+      saveAccountLimitSnapshot(
+        ctx.cwd,
+        event.status,
+        event.headers,
+        ctx.model?.provider,
+      );
+    } catch (error) {
+      traceEvent(debugTrace, "limits.save.error", "failed to save provider limits", {
+        error,
+      });
+    }
+  });
+
+  pi.on("turn_end", (_event, ctx) => {
+    turnsSinceCompaction += 1;
+    if (!config.enabled || !config.contextEconomy.autoCompact) return;
+    const usage = ctx.getContextUsage();
+    if (
+      compactionInProgress ||
+      !ctx.isIdle() ||
+      usage?.tokens === null ||
+      usage?.percent === null ||
+      usage === undefined ||
+      usage.tokens < config.contextEconomy.minTokens ||
+      usage.percent < config.contextEconomy.compactAtPercent ||
+      turnsSinceCompaction < config.contextEconomy.cooldownTurns
+    ) {
+      return;
+    }
+    compactionInProgress = true;
+    if (ctx.hasUI) {
+      ctx.ui.notify(
+        `Tokenomy compaction started at ${usage.percent.toFixed(1)}% context use`,
+        "info",
+      );
+    }
+    ctx.compact({
+      customInstructions: config.contextEconomy.customInstructions,
+      onComplete: () => {
+        compactionInProgress = false;
+        if (ctx.hasUI) ctx.ui.notify("Tokenomy compaction completed", "info");
+      },
+      onError: (error) => {
+        compactionInProgress = false;
+        if (ctx.hasUI) {
+          ctx.ui.notify(`Tokenomy compaction failed: ${error.message}`, "error");
+        }
+      },
+    });
+  });
+
+  pi.on("session_compact", (_event, ctx) => {
+    turnsSinceCompaction = 0;
+    compactionInProgress = false;
+    try {
+      recordCompaction(ctx.cwd, config);
+    } catch (error) {
+      traceEvent(debugTrace, "compaction.telemetry.error", "failed to record compaction", {
+        error,
+      });
+    }
+  });
+
+  pi.on("agent_settled", async (_event, ctx) => {
+    const pendingTurn = pendingTurnTelemetry;
+    pendingTurnTelemetry = undefined;
+    if (pendingTurn) {
+      markTurnUsageUnavailable(ctx.cwd, pendingTurn, config);
+      finalizeTurnOutcome(ctx.cwd, pendingTurn, config);
+    }
+    const pendingRestore = pendingStateRestore;
+    pendingStateRestore = undefined;
+    await restoreStateIfPending(
+      pendingRestore,
+      pi,
+      ctx,
+      config,
+      debugTrace,
+    );
+  });
 
   pi.on("session_start", async (_event, ctx) => {
     const loaded = loadConfig(ctx.cwd);
@@ -3052,7 +4005,11 @@ export default function tokenomy(pi: ExtensionAPI) {
     configWarnings = loaded.warnings;
     if (pi.getFlag("tokenomy-off")) config = { ...config, enabled: false };
     baselineModel = modelLabel(ctx.model);
-    pendingModelRestore = undefined;
+    pendingStateRestore = undefined;
+    pendingTurnTelemetry = undefined;
+    classifierCallsThisSession = 0;
+    turnsSinceCompaction = config.contextEconomy.cooldownTurns;
+    compactionInProgress = false;
     debugTrace = config.debug.trace ? startDebugTrace(ctx.cwd) : undefined;
     traceEvent(
       debugTrace,
@@ -3074,14 +4031,13 @@ export default function tokenomy(pi: ExtensionAPI) {
     } catch (error) {
       statsWarning = `failed to load Tokenomy memory: ${error instanceof Error ? error.message : String(error)}`;
     }
-    if (config.enabled) {
+    if (config.enabled && !ctx.model) {
       const startupModel = findStartupModel(ctx, config);
       if (startupModel && !config.debug.dryRun) {
         await pi.setModel(startupModel);
         baselineModel = modelLabel(startupModel);
       }
     }
-    estimatedTokensSaved = 0;
     if (configWarnings.length && ctx.hasUI) {
       ctx.ui.notify(`Tokenomy config warnings:\n- ${configWarnings.join("\n- ")}`, "warning");
     }
@@ -3108,17 +4064,18 @@ export default function tokenomy(pi: ExtensionAPI) {
       return { action: "continue" as const };
     }
     const usage = ctx.getContextUsage();
+    const contextTokens = usage?.tokens ?? undefined;
     const imageCount = event.images?.length ?? 0;
     let analysis = analyzePrompt(
       event.text,
-      usage?.tokens,
+      contextTokens,
       imageCount,
       config,
     );
     analysis = applyContinuationContext(analysis, event.text, lastDecision);
     traceEvent(debugTrace, "analysis.input", `toolProfile=${analysis.toolProfile}`, {
       analysis,
-      contextTokens: usage?.tokens,
+      contextTokens,
       imageCount,
     });
     applyToolPolicy(analysis.toolProfile, config, pi, ctx);
@@ -3139,10 +4096,12 @@ export default function tokenomy(pi: ExtensionAPI) {
       return;
     }
 
-    pendingModelRestore = undefined;
+    pendingStateRestore = undefined;
+    pendingTurnTelemetry = undefined;
     const modelBeforeRouting = ctx.model;
+    const thinkingBeforeRouting = pi.getThinkingLevel();
     const usage = ctx.getContextUsage();
-    const contextTokens = usage?.tokens;
+    const contextTokens = usage?.tokens ?? undefined;
     const imageCount = event.images?.length ?? 0;
     let analysis = analyzePrompt(
       event.prompt,
@@ -3174,6 +4133,8 @@ export default function tokenomy(pi: ExtensionAPI) {
     let reason = analysis.signals.join(",") || "local heuristic";
     let confidence: number | undefined;
     let classifierPromptTelemetry: ClassifierPromptTelemetry | undefined;
+    let classifierUsage: UsageTotals | undefined;
+    let classifierEstimatedPlanCredits: number | undefined;
     const heuristicUncertain =
       analysis.confidence < config.classifier.minConfidence;
     const classifierKey = classifierCacheKey(
@@ -3199,16 +4160,39 @@ export default function tokenomy(pi: ExtensionAPI) {
           cacheKey: classifierKey,
           cached,
         });
-        const liveClassification = cached
+        const budget = cached
           ? undefined
-          : await classifyWithCheapModel(
+          : classifierBudgetDecision(
+              ctx,
+              modelBeforeRouting,
+              contextTokens,
+              analysis,
+              config,
+              classifierCallsThisSession,
+            );
+        traceEvent(
+          debugTrace,
+          "classifier.budget",
+          budget?.reason ?? "cache hit; no live classifier cost",
+          budget ? { ...budget } : undefined,
+        );
+        let liveClassification:
+          | Awaited<ReturnType<typeof classifyWithCheapModel>>
+          | undefined;
+        if (!cached && budget?.allowed) {
+          classifierCallsThisSession += 1;
+          liveClassification = await classifyWithCheapModel(
             event.prompt,
             contextTokens,
             analysis,
             config,
             ctx,
           );
+        }
         classifierPromptTelemetry = liveClassification?.promptTelemetry;
+        classifierUsage = liveClassification?.usage;
+        classifierEstimatedPlanCredits =
+          liveClassification?.estimatedPlanCredits;
         if (liveClassification) {
           traceEvent(debugTrace, "classifier.response", "classifier response received", {
             rawClassifierPrompt: liveClassification.classifierPromptText,
@@ -3245,7 +4229,9 @@ export default function tokenomy(pi: ExtensionAPI) {
           source = "fallback";
           reason = classified
             ? `classifier confidence ${Math.round(classified.confidence * 100)}% below ${Math.round(config.classifier.minConfidence * 100)}%`
-            : "classifier unavailable";
+            : budget && !budget.allowed
+              ? budget.reason
+              : "classifier unavailable";
           confidence = classified?.confidence;
           traceEvent(debugTrace, "classifier.rejected", reason, {
             classified,
@@ -3346,48 +4332,40 @@ export default function tokenomy(pi: ExtensionAPI) {
 
     const originalLabel = modelLabel(modelBeforeRouting);
     const selectedLabel = modelLabel(target);
-    if (
+    if (!config.debug.dryRun) pi.setThinkingLevel(thinking);
+    const shouldRestoreModel =
       config.routing.restoreModelAfterPrompt &&
       switchedModel &&
-      modelBeforeRouting &&
-      originalLabel &&
-      selectedLabel &&
-      originalLabel !== selectedLabel
-    ) {
-      pendingModelRestore = {
-        restoreModel: modelBeforeRouting,
-        restoreLabel: originalLabel,
-        selectedLabel,
+      !!modelBeforeRouting &&
+      !!originalLabel &&
+      !!selectedLabel &&
+      originalLabel !== selectedLabel;
+    const shouldRestoreThinking =
+      config.routing.restoreThinkingAfterPrompt &&
+      thinkingBeforeRouting !== thinking;
+    if (shouldRestoreModel || shouldRestoreThinking) {
+      pendingStateRestore = {
+        restoreModel: shouldRestoreModel ? modelBeforeRouting : undefined,
+        restoreLabel: shouldRestoreModel ? originalLabel : undefined,
+        selectedLabel: shouldRestoreModel ? selectedLabel : undefined,
+        restoreThinking: thinkingBeforeRouting,
+        selectedThinking: thinking,
       };
-      traceEvent(debugTrace, "model.restore.scheduled", `restore ${originalLabel}`, {
-        restoreLabel: originalLabel,
-        selectedLabel,
+      traceEvent(debugTrace, "state.restore.scheduled", "restore user model/thinking after settle", {
+        pendingStateRestore,
       });
     }
-
-    if (!config.debug.dryRun) pi.setThinkingLevel(thinking);
     lastDecision = decision;
 
-    const baselineScore = baselineModel
-      ? modelFamilyRank(baselineModel.split("/").pop() ?? baselineModel)
-      : 0;
-    const targetScore = target ? modelFamilyRank(target.id) : baselineScore;
-    const costChunks = Math.max(
-      1,
-      Math.ceil((contextTokens ?? event.prompt.length) / 4000),
-    );
-    const baselineCostUnits = baselineScore * costChunks * 50;
-    const actualCostUnits = targetScore * costChunks * 50;
-    const promptSavings =
-      Math.max(0, baselineCostUnits - actualCostUnits);
-    estimatedTokensSaved += promptSavings;
-    traceEvent(debugTrace, "counterfactual", `saved=${promptSavings}`, {
-      baselineModel,
+    // New turns no longer manufacture "token savings" from model ranks. These
+    // legacy fields stay zero for file compatibility; exact usage is attached
+    // after agent_end and any old non-zero values are labeled pre-v2 proxies.
+    const baselineCostUnits = 0;
+    const actualCostUnits = 0;
+    const promptSavings = 0;
+    traceEvent(debugTrace, "counterfactual", "counterfactual disabled; awaiting measured usage", {
+      baselineModel: originalLabel,
       selectedModel: modelLabel(target),
-      baselineCostUnits,
-      actualCostUnits,
-      promptSavings,
-      sessionEstimatedTokensSaved: estimatedTokensSaved,
     });
     const memory = safeLoadProjectMemory(ctx.cwd);
     const memoryInjection = buildMemoryInjection(
@@ -3421,7 +4399,6 @@ export default function tokenomy(pi: ExtensionAPI) {
         stats.sessionsStarted += 1;
         statsSessionRecorded = true;
       }
-      stats.lifetimeEstimatedTokensSaved += promptSavings;
       stats.routedPrompts += 1;
       if (digestPrompt) stats.projectDigestUses += 1;
       if (memoryInjection) {
@@ -3433,7 +4410,7 @@ export default function tokenomy(pi: ExtensionAPI) {
       updateIntentStats(stats, analysis, decision);
       try {
         saveStats(ctx.cwd, stats);
-        recordRoutingHistory(
+        const historyId = recordRoutingHistory(
           ctx.cwd,
           event.prompt,
           contextTokens,
@@ -3441,11 +4418,26 @@ export default function tokenomy(pi: ExtensionAPI) {
           analysis,
           decision,
           promptSavings,
-          estimatedTokensSaved,
+          0,
           classifierPromptTelemetry,
           memoryInjection,
+          originalLabel,
           config,
         );
+        if (historyId) {
+          pendingTurnTelemetry = {
+            historyId,
+            startedAt: new Date().toISOString(),
+            baselineModel: originalLabel,
+            selectedModel: decision.model,
+            classifierUsage,
+            classifierEstimatedPlanCredits,
+            agentEndCount: 0,
+            usageRecorded: false,
+            toolCalls: 0,
+            toolErrors: 0,
+          };
+        }
         recordTelemetryRollup(
           ctx.cwd,
           analysis,
@@ -3493,7 +4485,6 @@ export default function tokenomy(pi: ExtensionAPI) {
       decision,
       contextTokens,
       config,
-      estimatedTokensSaved,
     );
     const additions = [digestPrompt, memoryInjection?.text, discipline].filter(Boolean);
     traceEvent(debugTrace, "system.additions", `count=${additions.length}`, {
@@ -3510,7 +4501,7 @@ export default function tokenomy(pi: ExtensionAPI) {
 
   pi.registerCommand("tokenomy", {
     description:
-      "Show or change Tokenomy token-router status: /tokenomy [on|off|reload|status|explain|history|report|memory|debug on|debug off|debug path|export-history|export-report|reset-history|reset-stats|dry-run on|dry-run off]",
+      "Show or change Tokenomy token-router status: /tokenomy [on|off|mode save|mode balanced|mode quality|reload|status|explain|history|report|limits|compact|memory|debug on|debug off|debug path|export-history|export-report|reset-history|reset-stats|dry-run on|dry-run off]",
     handler: async (args, ctx) => {
       const action = args.trim().toLowerCase() || "status";
       if (action === "on") {
@@ -3521,6 +4512,15 @@ export default function tokenomy(pi: ExtensionAPI) {
       if (action === "off") {
         config.enabled = false;
         ctx.ui.notify("Tokenomy disabled", "info");
+        return;
+      }
+      if (
+        action === "mode save" ||
+        action === "mode balanced" ||
+        action === "mode quality"
+      ) {
+        config.mode = action.slice("mode ".length) as EconomyMode;
+        ctx.ui.notify(`Tokenomy economy mode: ${config.mode}`, "info");
         return;
       }
       if (action === "dry-run on") {
@@ -3574,7 +4574,6 @@ export default function tokenomy(pi: ExtensionAPI) {
       if (action === "reset-stats") {
         stats = emptyStats();
         statsSessionRecorded = false;
-        estimatedTokensSaved = 0;
         try {
           saveStats(ctx.cwd, stats);
           saveTelemetryRollups(ctx.cwd, emptyRollups(), config);
@@ -3590,7 +4589,13 @@ export default function tokenomy(pi: ExtensionAPI) {
         try {
           const report = telemetryReportForAction(ctx.cwd, action);
           ctx.ui.notify(
-            formatTelemetryReport(ctx.cwd, report.label, report.bucket, report.rollups),
+            formatTelemetryReport(
+              ctx.cwd,
+              report.label,
+              report.bucket,
+              report.rollups,
+              config,
+            ),
             "info",
           );
         } catch (error) {
@@ -3599,6 +4604,50 @@ export default function tokenomy(pi: ExtensionAPI) {
             "warning",
           );
         }
+        return;
+      }
+      if (action === "limits") {
+        const snapshot = loadAccountLimitSnapshot(ctx.cwd);
+        ctx.ui.notify(
+          snapshot
+            ? [
+                "Tokenomy provider limit snapshot",
+                "Scope: latest limit-related response headers visible to this Pi project; not total ChatGPT/Codex account usage",
+                `Provider: ${snapshot.provider ?? "unknown"}`,
+                `HTTP status: ${snapshot.status}`,
+                ...Object.entries(snapshot.headers).map(
+                  ([name, value]) => `${name}: ${value}`,
+                ),
+                `Updated: ${snapshot.updatedAt}`,
+                `File: ${accountLimitsPath(ctx.cwd)}`,
+              ].join("\n")
+            : [
+                "Tokenomy provider limit snapshot: unavailable",
+                "The current provider has not exposed recognized limit headers to this Pi process.",
+                "Local Tokenomy usage is project-scoped and is not an account-wide quota meter.",
+              ].join("\n"),
+          "info",
+        );
+        return;
+      }
+      if (action === "compact") {
+        if (compactionInProgress) {
+          ctx.ui.notify("Tokenomy compaction is already running", "info");
+          return;
+        }
+        compactionInProgress = true;
+        ctx.ui.notify("Tokenomy compaction started", "info");
+        ctx.compact({
+          customInstructions: config.contextEconomy.customInstructions,
+          onComplete: () => {
+            compactionInProgress = false;
+            ctx.ui.notify("Tokenomy compaction completed", "info");
+          },
+          onError: (error) => {
+            compactionInProgress = false;
+            ctx.ui.notify(`Tokenomy compaction failed: ${error.message}`, "error");
+          },
+        });
         return;
       }
       if (action === "history") {
@@ -3749,18 +4798,22 @@ export default function tokenomy(pi: ExtensionAPI) {
       const lines = [
         `Tokenomy: ${config.enabled ? "enabled" : "disabled"}`,
         `Version: ${packageVersion()}`,
+        `Economy mode: ${config.mode}`,
         `Provider: ${config.provider}`,
-        `Classifier: ${config.classifier.enabled ? "enabled" : "disabled"} (${config.classifier.onlyWhenAmbiguous ? "ambiguous only" : "all eligible"})`,
+        `Classifier: ${config.classifier.enabled ? "enabled" : "disabled"} (${config.classifier.onlyWhenAmbiguous ? "ambiguous only" : "all eligible"}, ${classifierCallsThisSession}/${config.classifier.maxCallsPerSession} live calls this session)`,
         `Telemetry: ${config.telemetry.enabled ? "enabled" : "disabled"} (${config.telemetry.maxEntries} history entries, ${config.telemetry.rollupRetentionDays} rollup days)`,
         memorySummary(safeLoadProjectMemory(ctx.cwd), config),
         `Prompt simplification: ${config.promptSimplification.enabled ? "enabled" : "disabled"}`,
         `Prompt compression: ${config.promptSimplification.compressionEnabled ? "enabled" : "disabled"}`,
+        `Context compaction: ${config.contextEconomy.autoCompact ? `automatic at ${config.contextEconomy.compactAtPercent}% after ${config.contextEconomy.cooldownTurns} cooldown turns` : "manual (/tokenomy compact)"}`,
         `Restore model after prompt: ${config.routing.restoreModelAfterPrompt ? "enabled" : "disabled"}`,
+        `Restore thinking after prompt: ${config.routing.restoreThinkingAfterPrompt ? "enabled" : "disabled"}`,
         `Debug trace: ${debugTrace ? `enabled (${debugTrace.path})` : "disabled"}`,
         `Tool management: ${config.tools.manage ? "enabled" : "disabled"}`,
         `Last decision: ${lastDecision ? `${lastDecision.tier} via ${lastDecision.source}, model=${lastDecision.model ?? "none"}, thinking=${lastDecision.thinking}, reason=${lastDecision.reason}` : "none"}`,
-        `Estimated tokens saved this session: ${estimatedTokensSaved}`,
-        `Estimated tokens saved lifetime: ${stats.lifetimeEstimatedTokensSaved}`,
+        `Usage accounting: measured after agent_end; unavailable turns are explicit`,
+        `Plan credit estimates: ${config.planCredits.enabled ? `enabled (rate card ${config.planCredits.rateCardVersion})` : "disabled"}`,
+        `Legacy pre-v2 savings proxy lifetime: ${stats.lifetimeEstimatedTokensSaved} model-rank units`,
         `Routed prompts lifetime: ${stats.routedPrompts}`,
         `Tokenomy sessions lifetime: ${stats.sessionsStarted}`,
         `Classifier cache hits lifetime: ${stats.classifierCacheHits}`,
@@ -3773,6 +4826,7 @@ export default function tokenomy(pi: ExtensionAPI) {
         `Stats file: ${statsPath(ctx.cwd)}`,
         `Routing history file: ${routingHistoryPath(ctx.cwd)}`,
         `Telemetry rollup file: ${telemetryRollupsPath(ctx.cwd)}`,
+        `Provider limit file: ${accountLimitsPath(ctx.cwd)}`,
         `Memory file: ${projectMemoryPath(ctx.cwd)}`,
         ...(statsWarning ? [`Stats warning: ${statsWarning}`] : []),
         `Config files: ${join(getAgentDir(), "tokenomy.json")} and ${join(ctx.cwd, CONFIG_DIR_NAME, "tokenomy.json")}`,

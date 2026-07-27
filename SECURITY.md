@@ -6,9 +6,10 @@ or store API keys.
 ## Stored Data
 
 Tokenomy may create `.pi/tokenomy-stats.json` and `.pi/tokenomy-cache/` in
-projects where it runs. The stats file stores local estimated usage counters:
+projects where it runs. The stats file stores local routing counters and a
+deprecated pre-v2 savings field:
 
-- lifetime estimated tokens saved
+- legacy lifetime model-rank savings proxy
 - routed prompt count
 - Tokenomy session count
 - classifier cache hit count
@@ -25,18 +26,27 @@ metadata such as intent counts and the last selected tier/model.
 
 Routing telemetry, when enabled, stores recent decision metadata in
 `.pi/tokenomy-cache/routing-history.json`. It includes prompt hashes, prompt
-size, context bucket, selected tier/source/model, confidence, signals, and
-estimated token savings. For live classifier calls, it also includes
-compression guard status and counts, but not the protected signal line text. It
-does not store raw prompt text or model responses.
+size, context bucket, selected tier/source/model, confidence, signals, usage
+status, provider-reported token/cost totals, and estimated plan credits. For
+live classifier calls, it also includes classifier usage and compression guard
+status/counts, but not the protected signal-line text. It does not store raw
+prompt text or model responses.
 
 Telemetry rollups are stored in `.pi/tokenomy-cache/telemetry-rollups.json`.
-They aggregate daily, monthly, and lifetime counters such as estimated baseline
-cost units, estimated routed cost units, estimated savings, route distribution,
-classifier cache hits, memory savings estimates, compression savings estimates,
-adaptive fallbacks, prompt-shape distribution, action-count distribution,
-multi-step prompt counts, and compression guard rejections. Rollups do not store
-raw prompt text, prompt hashes, model responses, API keys, or auth headers.
+They aggregate daily, monthly, and lifetime counters such as input/cached/output
+tokens, optional reasoning, request counts, cost, plan-credit estimates,
+measured/unavailable coverage, route distribution, classifier overhead,
+adaptive fallbacks, prompt shape, completion stop-reason categories, tool
+call/error counts, retry runs, compactions, and compression guard rejections.
+Rollups do not store raw prompt text, prompt hashes, tool arguments/results,
+model responses, API keys, or auth headers.
+
+When the provider exposes recognized rate-limit or usage response headers,
+Tokenomy stores the latest sanitized subset in
+`.pi/tokenomy-cache/account-limits.json`. The allowlist excludes authorization,
+cookies, and unrelated headers; values containing line breaks are rejected and
+stored values are length-limited. This snapshot is provider/process scoped, not
+an account-wide ledger.
 
 Tokenomy does not store raw prompt text, model responses, API keys, or auth
 headers during normal operation.

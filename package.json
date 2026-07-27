@@ -1,6 +1,6 @@
 {
   "name": "tokenomy-pi",
-  "version": "0.1.23-beta",
+  "version": "0.1.24-beta",
   "description": "Automatic token-saving router for Pi/Codex that uses cheaper models when safe and preserves quality with confidence checks, local memory, and prompt compression.",
   "license": "MIT",
   "type": "module",
@@ -24,6 +24,8 @@
     "LIMITATIONS.md",
     "SECURITY.md",
     "CHANGELOG.md",
+    "tsconfig.json",
+    "types/tokenshrink.d.ts",
     "LICENSE"
   ],
   "engines": {
@@ -31,6 +33,7 @@
   },
   "scripts": {
     "test": "node --experimental-strip-types --loader ./tests/pi-extension-loader.mjs --test tests/*.test.mjs",
+    "typecheck": "tsc -p tsconfig.json",
     "json:check": "node -e \"for (const f of ['.pi/tokenomy.json','.pi/settings.json','package.json']) JSON.parse(require('fs').readFileSync(f,'utf8')); console.log('json ok')\"",
     "pi:check": "pi --offline --approve --no-session --list-models openai-codex"
   },
@@ -40,8 +43,8 @@
     ]
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*"
+    "@earendil-works/pi-ai": ">=0.82.1 <0.83.0",
+    "@earendil-works/pi-coding-agent": ">=0.82.1 <0.83.0"
   },
   "peerDependenciesMeta": {
     "@earendil-works/pi-ai": {
@@ -65,5 +68,11 @@
   "dependencies": {
     "compromise": "^14.15.1",
     "tokenshrink": "^2.0.0"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "0.82.1",
+    "@earendil-works/pi-coding-agent": "0.82.1",
+    "@types/node": "26.1.1",
+    "typescript": "7.0.2"
   }
 }

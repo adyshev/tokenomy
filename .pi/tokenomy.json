@@ -1,5 +1,6 @@
 {
   "enabled": true,
+  "mode": "balanced",
   "provider": "openai-codex",
   "models": {
     "classifier": ["gpt-5.4-mini"],
@@ -17,21 +18,50 @@
     "onlyWhenAmbiguous": true,
     "maxPromptChars": 4000,
     "maxEstimatedClassifierTokens": 1400,
+    "maxCallsPerSession": 12,
+    "minEstimatedNetCredits": 0.01,
     "minConfidence": 0.95
+  },
+  "planCredits": {
+    "enabled": true,
+    "rateCardVersion": "2026-07-27",
+    "rates": {
+      "gpt-5.6-sol": { "input": 125, "cacheRead": 12.5, "output": 750 },
+      "gpt-5.6-terra": { "input": 62.5, "cacheRead": 6.25, "output": 375 },
+      "gpt-5.6-luna": { "input": 25, "cacheRead": 2.5, "output": 150 },
+      "gpt-5.5": { "input": 125, "cacheRead": 12.5, "output": 750 },
+      "gpt-5.4": { "input": 62.5, "cacheRead": 6.25, "output": 375 },
+      "gpt-5.4-mini": { "input": 18.75, "cacheRead": 1.875, "output": 113 },
+      "gpt-5.3-codex": { "input": 43.75, "cacheRead": 4.375, "output": 350 },
+      "gpt-5.2-codex": { "input": 43.75, "cacheRead": 4.375, "output": 350 }
+    }
   },
   "telemetry": {
     "enabled": true,
     "maxEntries": 200,
     "rollupRetentionDays": 400
   },
+  "contextEconomy": {
+    "autoCompact": false,
+    "compactAtPercent": 85,
+    "minTokens": 80000,
+    "cooldownTurns": 8,
+    "customInstructions": "Preserve the active task, decisions, modified files, validation results, blockers, and exact next steps. Drop repeated logs and superseded exploration."
+  },
   "memory": {
     "enabled": true,
-    "inject": true,
+    "inject": false,
     "maxFacts": 80,
     "maxInjectedChars": 1200,
     "maxFactChars": 240,
     "staleAfterDays": 30,
     "minContextTokensForInjection": 20000
+  },
+  "distillation": {
+    "enabled": false,
+    "minContextTokens": 80000,
+    "repeatPromptThreshold": 3,
+    "maxDigestChars": 1200
   },
   "tools": {
     "manage": false,
@@ -40,7 +70,8 @@
     "writeTools": ["read", "grep", "find", "ls", "edit", "write", "bash"]
   },
   "routing": {
-    "restoreModelAfterPrompt": true
+    "restoreModelAfterPrompt": true,
+    "restoreThinkingAfterPrompt": true
   },
   "promptDiscipline": {
     "enabled": true,

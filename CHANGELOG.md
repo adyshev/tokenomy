@@ -1,6 +1,36 @@
 # Changelog
 
-## Unreleased
+## 0.1.24-beta - 2026-07-27
+
+- Added `save`, `balanced`, and `quality` economy modes, configurable
+  plan-credit rate cards, live-classifier session budgets, and conservative
+  classifier break-even gating.
+- Added completion/tool-error/retry telemetry and clearly labeled
+  cost-per-completed-turn reporting without claiming verified task success.
+- Added sanitized provider rate-limit header snapshots and `/tokenomy limits`
+  with explicit project/process scope.
+- Added `/tokenomy compact`, opt-in threshold compaction with cooldown and
+  task-preservation instructions, and compaction rollups.
+- Replaced model-rank “token-equivalent” claims for new turns with
+  provider-reported input, cached-input, cache-write, output, reasoning,
+  total-token, request, and cost accounting from Pi `agent_end` messages.
+- Added telemetry rollup schema version 2, per-turn measured/unavailable status,
+  cache-read ratio reporting, classifier overhead, and versioned ChatGPT
+  plan-credit estimates.
+- Migrated lifecycle handling to current Pi `agent_end` and `agent_settled`
+  events. Model restoration now waits until retries and continuations settle.
+- Preserved the user's startup model and added guarded restoration of the
+  pre-route thinking level.
+- Made project-memory and routing-digest prompt injection opt-in by default and
+  removed changing savings/context counters from prompt-discipline text to
+  improve exact-prefix cache stability.
+- Kept older telemetry readable while labeling historical savings/cost-unit
+  values as pre-v2 model-rank proxies.
+- Expanded integration coverage for current lifecycle registration, measured
+  usage, plan-credit conversion, unavailable usage, startup model preservation,
+  state restoration, and stable default prompt additions.
+- Added strict TypeScript checking against pinned Pi `0.82.1` development
+  packages and constrained supported peers to the `0.82.x` API line.
 
 ## 0.1.23-beta - 2026-07-09
 - Preserved the previous routing context for short continuation prompts such

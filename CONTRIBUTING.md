@@ -11,17 +11,20 @@ Requirements:
 - Pi installed locally
 - `@earendil-works/pi-coding-agent` available through the Pi install
 
-Run tests:
+Install locked dependencies, typecheck against the supported Pi API, and run
+tests:
 
 ```bash
+npm ci
+npm run typecheck
 npm test
 ```
 
 The tests use Node's built-in test runner and a mocked Pi runtime. They do not
 make real model calls.
 
-GitHub Actions runs JSON validation and `npm test` on every push and pull
-request targeting `main`.
+GitHub Actions runs JSON validation, strict typechecking, and `npm test` on
+every push and pull request targeting `main`.
 
 ## Branch And PR Policy
 
@@ -100,6 +103,7 @@ Routing changes should cover at least:
 
 Before tagging a release:
 
+- `npm run typecheck` passes
 - `npm test` passes
 - `pi --offline --approve --no-session --list-models openai-codex` loads the extension
 - README and INSTALL recommend the current install path
