@@ -91,8 +91,10 @@ test("economic evaluation is paired, fixed-baseline, and explicitly opt-in", () 
 
 test("CI tests the packed package on Linux, macOS, and Windows", () => {
   const workflow = readFileSync(".github/workflows/ci.yml", "utf8");
+  const packageSmoke = readFileSync("scripts/package-smoke.mjs", "utf8");
   assert.match(workflow, /ubuntu-latest, macos-latest, windows-latest/);
   assert.match(workflow, /npm run test:package/);
+  assert.match(packageSmoke, /process\.platform === "win32" \? "npm\.cmd" : "npm"/);
 });
 
 function modelLabel(model) {

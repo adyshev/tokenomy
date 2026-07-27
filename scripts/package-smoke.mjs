@@ -15,13 +15,16 @@ const npmEnvironment = {
   ...process.env,
   npm_config_cache: join(workspace, ".npm-cache"),
 };
-const packed = spawnSync("npm", ["pack", "--pack-destination", workspace], {
+const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+const packed = spawnSync(npmCommand, ["pack", "--pack-destination", workspace], {
   cwd: root,
   encoding: "utf8",
   env: npmEnvironment,
 });
 if (packed.status !== 0) {
-  process.stderr.write(packed.stderr);
+  process.stderr.write(
+    packed.stderr ?? packed.error?.message ?? "npm pack failed",
+  );
   process.exit(packed.status ?? 1);
 }
 
@@ -32,7 +35,7 @@ writeFileSync(
   '{"name":"tokenomy-package-smoke","private":true}\n',
 );
 const installed = spawnSync(
-  "npm",
+    npmCommand,
   [
     "install",
     "--ignore-scripts",
@@ -43,7 +46,9 @@ const installed = spawnSync(
   { cwd: workspace, encoding: "utf8", env: npmEnvironment },
 );
 if (installed.status !== 0) {
-  process.stderr.write(installed.stderr);
+  process.stderr.write(
+    installed.stderr ?? installed.error?.message ?? "npm install failed",
+  );
   process.exit(installed.status ?? 1);
 }
 
