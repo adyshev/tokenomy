@@ -21,7 +21,8 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const workspace =
   process.env.TOKENOMY_LIVE_EVAL_DIR ||
   mkdtempSync(join(tmpdir(), "tokenomy-live-eval-"));
-const model = process.env.TOKENOMY_LIVE_MODEL || "openai-codex/gpt-5.5";
+const model =
+  process.env.TOKENOMY_LIVE_MODEL || "openai-codex/gpt-5.6-sol";
 const pi = resolve(root, "node_modules/.bin/pi");
 const extension = resolve(root, ".pi/extensions/tokenomy/index.ts");
 

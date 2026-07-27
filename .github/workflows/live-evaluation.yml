@@ -6,7 +6,12 @@ on:
       model:
         description: Signed-in Pi model to use
         required: true
-        default: openai-codex/gpt-5.5
+        default: openai-codex/gpt-5.6-sol
+      economic:
+        description: Run the paired fixed-model economic benchmark
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -42,4 +47,20 @@ jobs:
         with:
           name: tokenomy-live-evidence
           path: ${{ runner.temp }}/tokenomy-live-evidence.json
+          if-no-files-found: warn
+
+      - name: Run paired economic evaluation
+        if: inputs.economic
+        env:
+          TOKENOMY_ECON_EVAL: "1"
+          TOKENOMY_ECON_BASELINE_MODEL: ${{ inputs.model }}
+          TOKENOMY_ECON_EVAL_OUTPUT: ${{ runner.temp }}/tokenomy-economic-evidence.json
+        run: npm run test:economic
+
+      - name: Upload economic evidence
+        if: always() && inputs.economic
+        uses: actions/upload-artifact@v4
+        with:
+          name: tokenomy-economic-evidence
+          path: ${{ runner.temp }}/tokenomy-economic-evidence.json
           if-no-files-found: warn

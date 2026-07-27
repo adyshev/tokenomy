@@ -1,12 +1,7 @@
 import { createHash } from "node:crypto";
-import {
-  appendFileSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { complete, type Api, type Model } from "@earendil-works/pi-ai/compat";
 import nlp from "compromise/three";
 import { compress as shrinkPrompt, countTokens } from "tokenshrink";
@@ -18,9 +13,25 @@ import {
   CONFIG_DIR_NAME,
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
+import { mergeKnownConfig } from "./lib/config.ts";
+import {
+  DEFAULT_MODEL_TIERS,
+  PLAN_CREDIT_RATE_CARD_VERSION,
+  PLAN_CREDIT_RATES,
+} from "./lib/models.ts";
+import {
+  appendPrivateTextFile,
+  atomicWriteJsonFile,
+  ensurePrivateDir,
+  loadJsonFile,
+  purgeExpiredFiles,
+  purgeFiles,
+  storageHealth,
+} from "./lib/storage.ts";
 
 type Tier = "simple" | "medium" | "complex";
 type EconomyMode = "save" | "balanced" | "quality";
+type BudgetPolicy = "warn" | "save" | "ask";
 type ToolProfile = "none" | "read" | "write";
 type ThinkingLevel =
   | "off"
@@ -103,6 +114,7 @@ interface TokenomyConfig {
     sessionCredits: number;
     dailyCredits: number;
     warnAtPercent: number;
+    policy: BudgetPolicy;
   };
   cache: {
     enabled: boolean;
@@ -172,6 +184,8 @@ interface TokenomyConfig {
     dryRun: boolean;
     trace: boolean;
     verbose: boolean;
+    retentionDays: number;
+    redact: boolean;
   };
   promptDiscipline: {
     enabled: boolean;
@@ -215,6 +229,7 @@ interface DebugTrace {
   path: string;
   sessionId: string;
   seq: number;
+  redact: boolean;
 }
 
 interface LocalAnalysis {
@@ -586,31 +601,15 @@ const BUILTIN_TOOL_NAMES = new Set([
   "ls",
 ]);
 
-// ChatGPT plan credit rates published by OpenAI on 2026-07-27.
-// Values are credits per one million tokens. Keep this table versioned and
-// treat the result as an estimate: provider-reported tokens are measured, but
-// OpenAI can change the plan rate card independently of this package.
-const PLAN_CREDIT_RATE_CARD_VERSION = "2026-07-27";
-const PLAN_CREDIT_RATES: Record<string, CreditRates> = {
-  "gpt-5.6-sol": { input: 125, cacheRead: 12.5, output: 750 },
-  "gpt-5.6-terra": { input: 62.5, cacheRead: 6.25, output: 375 },
-  "gpt-5.6-luna": { input: 25, cacheRead: 2.5, output: 150 },
-  "gpt-5.5": { input: 125, cacheRead: 12.5, output: 750 },
-  "gpt-5.4": { input: 62.5, cacheRead: 6.25, output: 375 },
-  "gpt-5.4-mini": { input: 18.75, cacheRead: 1.875, output: 113 },
-  "gpt-5.3-codex": { input: 43.75, cacheRead: 4.375, output: 350 },
-  "gpt-5.2-codex": { input: 43.75, cacheRead: 4.375, output: 350 },
-};
-
 const DEFAULT_CONFIG: TokenomyConfig = {
   enabled: true,
   mode: "balanced",
   provider: "openai-codex",
   models: {
-    classifier: ["gpt-5.4-mini"],
-    simple: ["gpt-5.4-mini", "gpt-5.4"],
-    medium: ["gpt-5.4", "gpt-5.4-mini"],
-    complex: ["gpt-5.5", "gpt-5.4"],
+    classifier: [...DEFAULT_MODEL_TIERS.classifier],
+    simple: [...DEFAULT_MODEL_TIERS.simple],
+    medium: [...DEFAULT_MODEL_TIERS.medium],
+    complex: [...DEFAULT_MODEL_TIERS.complex],
   },
   thinking: {
     simple: "minimal",
@@ -662,6 +661,7 @@ const DEFAULT_CONFIG: TokenomyConfig = {
     sessionCredits: 0,
     dailyCredits: 0,
     warnAtPercent: 80,
+    policy: "warn",
   },
   cache: {
     enabled: true,
@@ -732,6 +732,8 @@ const DEFAULT_CONFIG: TokenomyConfig = {
     dryRun: false,
     trace: false,
     verbose: false,
+    retentionDays: 7,
+    redact: true,
   },
   promptDiscipline: {
     enabled: true,
@@ -787,25 +789,8 @@ function packageVersion(): string {
   }
 }
 
-function deepMerge<T>(base: T, override: unknown): T {
-  if (!isObject(base) || !isObject(override)) {
-    return (override === undefined ? base : override) as T;
-  }
-
-  const output: Record<string, unknown> = { ...base };
-  for (const [key, value] of Object.entries(override)) {
-    const existing = output[key];
-    output[key] =
-      isObject(existing) && isObject(value)
-        ? deepMerge(existing, value)
-        : value;
-  }
-  return output as T;
-}
-
 function loadJson(path: string): unknown | undefined {
-  if (!existsSync(path)) return undefined;
-  return JSON.parse(readFileSync(path, "utf8"));
+  return loadJsonFile(path);
 }
 
 function debugSessionId(): string {
@@ -817,7 +802,12 @@ function debugTracePath(cwd: string, sessionId: string): string {
   return join(debugTraceDir(cwd), `session-${stamp}-${sessionId}.jsonl`);
 }
 
-function sanitizeForTrace(value: unknown, depth = 0, seen = new WeakSet<object>()): unknown {
+function sanitizeForTrace(
+  value: unknown,
+  depth = 0,
+  seen = new WeakSet<object>(),
+  redact = false,
+): unknown {
   if (depth > 8) return "[MaxDepth]";
   if (value instanceof Error) {
     return { name: value.name, message: value.message, stack: value.stack };
@@ -835,17 +825,27 @@ function sanitizeForTrace(value: unknown, depth = 0, seen = new WeakSet<object>(
     return String(value);
   }
   if (Array.isArray(value)) {
-    return value.map((item) => sanitizeForTrace(item, depth + 1, seen));
+    return value.map((item) => sanitizeForTrace(item, depth + 1, seen, redact));
   }
   if (typeof value === "object") {
     if (seen.has(value)) return "[Circular]";
     seen.add(value);
     const output: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-      if (key === "signal") {
+      if (
+        redact &&
+        /^(raw.*|prompt|promptText|outputText|memoryInjectionText|digestPrompt|systemPrompt|text)$/i.test(
+          key,
+        )
+      ) {
+        output[key] =
+          typeof item === "string"
+            ? `[Redacted ${item.length} chars]`
+            : "[Redacted]";
+      } else if (key === "signal") {
         output[key] = "[AbortSignal]";
       } else {
-        output[key] = sanitizeForTrace(item, depth + 1, seen);
+        output[key] = sanitizeForTrace(item, depth + 1, seen, redact);
       }
     }
     return output;
@@ -853,11 +853,11 @@ function sanitizeForTrace(value: unknown, depth = 0, seen = new WeakSet<object>(
   return String(value);
 }
 
-function startDebugTrace(cwd: string): DebugTrace {
+function startDebugTrace(cwd: string, redact: boolean): DebugTrace {
   const sessionId = debugSessionId();
   const path = debugTracePath(cwd, sessionId);
-  mkdirSync(dirname(path), { recursive: true });
-  return { enabled: true, path, sessionId, seq: 0 };
+  ensurePrivateDir(debugTraceDir(cwd));
+  return { enabled: true, path, sessionId, seq: 0, redact };
 }
 
 function traceEvent(
@@ -874,9 +874,9 @@ function traceEvent(
       ts: new Date().toISOString(),
       event,
       summary,
-      data: sanitizeForTrace(data),
+      data: sanitizeForTrace(data, 0, new WeakSet<object>(), trace.redact),
     };
-    appendFileSync(trace.path, `${JSON.stringify(entry)}\n`, "utf8");
+    appendPrivateTextFile(trace.path, `${JSON.stringify(entry)}\n`);
   } catch {
     // Debug tracing must never break routing.
   }
@@ -902,8 +902,10 @@ function debugSessionSnapshot(
     baselineModel,
     currentModel: modelLabel(ctx.model),
     cwd: ctx.cwd,
-    rawCapture: true,
-    warning: "Debug trace contains raw session data.",
+    rawCapture: !config.debug.redact,
+    warning: config.debug.redact
+      ? "Sensitive debug payload fields are redacted."
+      : "Debug trace contains raw session data.",
     lastDecision,
     config: {
       enabled: config.enabled,
@@ -1124,8 +1126,7 @@ async function refreshExternalRateCard(
     if (!card) {
       return { refreshed: false, warning: "remote rate card is invalid" };
     }
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, `${JSON.stringify(card, null, 2)}\n`, "utf8");
+    atomicWriteJsonFile(path, card);
     return { refreshed: true };
   } catch (error) {
     return {
@@ -1367,8 +1368,7 @@ function loadStats(cwd: string): TokenomyStats {
 function saveStats(cwd: string, stats: TokenomyStats): void {
   stats.updatedAt = new Date().toISOString();
   const path = statsPath(cwd);
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(stats, null, 2)}\n`, "utf8");
+  atomicWriteJsonFile(path, stats);
 }
 
 function loadRoutingHistory(cwd: string): RoutingHistory {
@@ -1419,9 +1419,8 @@ function saveRoutingHistory(
   config: TokenomyConfig,
 ): void {
   const path = routingHistoryPath(cwd);
-  mkdirSync(dirname(path), { recursive: true });
   const entries = history.entries.slice(0, config.telemetry.maxEntries);
-  writeFileSync(path, `${JSON.stringify({ entries }, null, 2)}\n`, "utf8");
+  atomicWriteJsonFile(path, { entries });
 }
 
 function emptyRollupBucket(): TelemetryRollupBucket {
@@ -1643,8 +1642,7 @@ function saveTelemetryRollups(
     daily,
     monthly,
   };
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+  atomicWriteJsonFile(path, next);
 }
 
 function isLimitHeader(name: string): boolean {
@@ -1679,8 +1677,7 @@ function saveAccountLimitSnapshot(
     headers: safeHeaders,
   };
   const path = accountLimitsPath(cwd);
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
+  atomicWriteJsonFile(path, snapshot);
   return snapshot;
 }
 
@@ -1728,8 +1725,7 @@ function loadProjectMemory(cwd: string): ProjectMemory {
 
 function saveProjectMemory(cwd: string, memory: ProjectMemory): void {
   const path = projectMemoryPath(cwd);
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(memory, null, 2)}\n`, "utf8");
+  atomicWriteJsonFile(path, memory);
 }
 
 function safeLoadProjectMemory(cwd: string): ProjectMemory | undefined {
@@ -1853,11 +1849,10 @@ function saveClassifierCache(
   config: TokenomyConfig,
 ): void {
   const path = classifierCachePath(cwd);
-  mkdirSync(dirname(path), { recursive: true });
   const entries = [...cache.entries]
     .sort((a, b) => b.lastUsedAt - a.lastUsedAt)
     .slice(0, config.cache.maxClassifierEntries);
-  writeFileSync(path, `${JSON.stringify({ entries }, null, 2)}\n`, "utf8");
+  atomicWriteJsonFile(path, { entries });
 }
 
 function getClassifierCacheEntry(
@@ -2083,8 +2078,7 @@ function safeLoadProjectDigest(cwd: string): ProjectDigest | undefined {
 
 function saveProjectDigest(cwd: string, digest: ProjectDigest): void {
   const path = projectDigestPath(cwd);
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(digest, null, 2)}\n`, "utf8");
+  atomicWriteJsonFile(path, digest);
 }
 
 function updateProjectDigest(
@@ -2261,6 +2255,9 @@ function validateConfig(config: TokenomyConfig): string[] {
   if (config.budgets.sessionCredits < 0 || config.budgets.dailyCredits < 0) {
     warnings.push("budgets sessionCredits and dailyCredits must be non-negative");
   }
+  if (!["warn", "save", "ask"].includes(config.budgets.policy)) {
+    warnings.push("budgets.policy must be warn, save, or ask");
+  }
   if (
     typeof config.cache.classifierTtlMs !== "number" ||
     config.cache.classifierTtlMs < 0
@@ -2395,6 +2392,15 @@ function validateConfig(config: TokenomyConfig): string[] {
   if (typeof config.debug.trace !== "boolean") {
     warnings.push("debug.trace must be a boolean");
   }
+  if (
+    typeof config.debug.retentionDays !== "number" ||
+    config.debug.retentionDays < 1
+  ) {
+    warnings.push("debug.retentionDays must be at least 1");
+  }
+  if (typeof config.debug.redact !== "boolean") {
+    warnings.push("debug.redact must be a boolean");
+  }
   return warnings;
 }
 
@@ -2407,7 +2413,9 @@ function loadConfig(cwd: string): { config: TokenomyConfig; warnings: string[] }
   for (const path of [globalPath, projectPath]) {
     try {
       const parsed = loadJson(path);
-      if (parsed !== undefined) config = deepMerge(config, parsed);
+      if (parsed !== undefined) {
+        config = mergeKnownConfig(config, parsed, warnings, path);
+      }
     } catch (error) {
       warnings.push(
         `failed to load ${path}: ${error instanceof Error ? error.message : String(error)}`,
@@ -3184,10 +3192,21 @@ function findFirstModel(
 
 function modelFamilyRank(id: string): number {
   const lower = id.toLowerCase();
-  if (lower.includes("mini") || lower.includes("small")) return 2;
-  if (lower.includes("gpt-5.5") || lower.includes("opus") || lower.includes("pro"))
-    return 5;
-  if (lower.includes("gpt-5.4") || lower.includes("sonnet") || lower.includes("medium"))
+  if (lower.includes("mini") || lower.includes("small")) return 1;
+  if (lower.includes("luna") || lower.includes("spark")) return 2;
+  if (
+    lower.includes("terra") ||
+    lower.includes("gpt-5.4") ||
+    lower.includes("sonnet") ||
+    lower.includes("medium")
+  )
+    return 3;
+  if (
+    lower.includes("sol") ||
+    lower.includes("gpt-5.5") ||
+    lower.includes("opus") ||
+    lower.includes("pro")
+  )
     return 4;
   return 3;
 }
@@ -5226,7 +5245,14 @@ export default function tokenomy(pi: ExtensionAPI) {
     turnsSinceCompaction = config.contextEconomy.cooldownTurns;
     compactionInProgress = false;
     pendingCompaction = undefined;
-    debugTrace = config.debug.trace ? startDebugTrace(ctx.cwd) : undefined;
+    purgeExpiredFiles(
+      debugTraceDir(ctx.cwd),
+      config.debug.retentionDays * 24 * 60 * 60 * 1000,
+      (name) => /^session-.*\.jsonl$/.test(name),
+    );
+    debugTrace = config.debug.trace
+      ? startDebugTrace(ctx.cwd, config.debug.redact)
+      : undefined;
     traceEvent(
       debugTrace,
       "session.start",
@@ -5504,6 +5530,58 @@ export default function tokenomy(pi: ExtensionAPI) {
         config.provider,
         config.providers.allowed,
       );
+    }
+
+    const currentDay = loadTelemetryRollups(ctx.cwd).daily[dayKey(new Date())];
+    const dailyEstimatedCredits = currentDay
+      ? currentDay.estimatedPlanCredits +
+        currentDay.classifierEstimatedPlanCredits
+      : 0;
+    const budgetThresholds = [
+      {
+        name: "session",
+        used: sessionEstimatedCredits,
+        limit: config.budgets.sessionCredits,
+      },
+      {
+        name: "daily",
+        used: dailyEstimatedCredits,
+        limit: config.budgets.dailyCredits,
+      },
+    ].filter(
+      ({ used, limit }) =>
+        limit > 0 &&
+        used >= limit * (config.budgets.warnAtPercent / 100),
+    );
+    if (
+      budgetThresholds.length &&
+      tier !== "simple" &&
+      analysis.risk !== "high" &&
+      config.budgets.policy !== "warn"
+    ) {
+      let downshift = config.budgets.policy === "save" || !ctx.hasUI;
+      if (config.budgets.policy === "ask" && ctx.hasUI) {
+        downshift = !(await ctx.ui.confirm(
+          "Tokenomy budget threshold reached",
+          `${budgetThresholds.map(({ name, used, limit }) => `${name} ${formatAmount(used)}/${formatAmount(limit)}`).join(", ")}. Keep the recommended ${tier} tier? Choose No to save credits for this turn.`,
+        ));
+      }
+      if (downshift) {
+        const originalTier = tier;
+        tier = tier === "complex" ? "medium" : "simple";
+        target = findFirstModel(
+          ctx,
+          config.models[tier],
+          config.provider,
+          config.providers.allowed,
+        );
+        reason = `${reason}; budget policy ${config.budgets.policy} downshifted ${originalTier} to ${tier}`;
+        traceEvent(debugTrace, "budget.downshift", reason, {
+          thresholds: budgetThresholds,
+          originalTier,
+          tier,
+        });
+      }
     }
     if (!target) {
       target = findBestConfiguredFallbackModel(ctx, config);
@@ -5793,7 +5871,7 @@ export default function tokenomy(pi: ExtensionAPI) {
       }
       if (action === "debug on") {
         config.debug.trace = true;
-        debugTrace = startDebugTrace(ctx.cwd);
+        debugTrace = startDebugTrace(ctx.cwd, config.debug.redact);
         traceEvent(debugTrace, "debug.enabled", "debug trace enabled by command", {
           ...debugSessionSnapshot(ctx, config, baselineModel, lastDecision),
         });
@@ -5819,6 +5897,81 @@ export default function tokenomy(pi: ExtensionAPI) {
             ? `Tokenomy debug trace: enabled\nTrace file: ${debugTrace.path}`
             : "Tokenomy debug trace: disabled",
           "info",
+        );
+        return;
+      }
+      if (action === "debug purge") {
+        const removed = purgeFiles(
+          debugTraceDir(ctx.cwd),
+          (name) => /^session-.*\.jsonl$/.test(name),
+        );
+        debugTrace = undefined;
+        ctx.ui.notify(`Tokenomy removed ${removed} debug trace file(s)`, "info");
+        return;
+      }
+      if (action === "doctor") {
+        const available = new Set(
+          ctx.modelRegistry
+            .getAvailable()
+            .map((model) => `${model.provider}/${model.id}`),
+        );
+        const configured = [
+          ...new Set(Object.values(config.models).flat()),
+        ];
+        const missing = configured.filter(
+          (spec) =>
+            !available.has(
+              spec.includes("/") ? spec : `${config.provider}/${spec}`,
+            ),
+        );
+        const storage = storageHealth(cacheDir(ctx.cwd));
+        const projectSchemaPath = join(
+          ctx.cwd,
+          CONFIG_DIR_NAME,
+          "tokenomy.schema.json",
+        );
+        const bundledSchemaPath = fileURLToPath(
+          new URL("../../tokenomy.schema.json", import.meta.url),
+        );
+        const schemaPath = existsSync(projectSchemaPath)
+          ? projectSchemaPath
+          : bundledSchemaPath;
+        const checks = [
+          {
+            name: "configuration",
+            ok: configWarnings.length === 0,
+            detail: configWarnings.length
+              ? configWarnings.join("; ")
+              : "valid; unknown keys are rejected",
+          },
+          {
+            name: "models",
+            ok: missing.length === 0,
+            detail: missing.length
+              ? `unavailable: ${missing.join(", ")}`
+              : `${configured.length} configured model(s) available`,
+          },
+          { name: "storage", ...storage },
+          {
+            name: "schema",
+            ok: existsSync(schemaPath),
+            detail: schemaPath,
+          },
+          {
+            name: "rate card",
+            ok: Object.keys(config.planCredits.rates).length > 0,
+            detail: config.planCredits.rateCardVersion,
+          },
+        ];
+        ctx.ui.notify(
+          [
+            `Tokenomy doctor: ${checks.every((check) => check.ok) ? "healthy" : "attention required"}`,
+            ...checks.map(
+              (check) =>
+                `${check.ok ? "PASS" : "WARN"} ${check.name}: ${check.detail}`,
+            ),
+          ].join("\n"),
+          checks.every((check) => check.ok) ? "info" : "warning",
         );
         return;
       }

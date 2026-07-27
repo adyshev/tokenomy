@@ -30,14 +30,15 @@ quota:
 
 ```bash
 TOKENOMY_LIVE_EVAL=1 npm run test:live
+TOKENOMY_ECON_EVAL=1 npm run test:economic
 ```
 
 Use `TOKENOMY_LIVE_EVALUATOR=1` only when the additional evaluator call is
 intended. The manual `Live Tokenomy Evaluation` workflow requires a
 self-hosted runner with an existing Pi sign-in.
 
-GitHub Actions runs JSON validation, strict typechecking, and `npm test` on
-every push and pull request targeting `main`.
+GitHub Actions runs JSON validation, strict typechecking, `npm test`, and a
+packed-install smoke test on Linux and macOS for every push and pull request.
 
 ## Branch And PR Policy
 
@@ -61,7 +62,10 @@ exists on npm. If it does not exist, it publishes the package. Prerelease
 versions such as `0.1.0-beta` are published with the `beta` dist-tag; stable
 versions are published with `latest`. After npm confirms the exact version, the
 workflow creates and pushes `v<version>` and creates or updates the matching
-GitHub Release as latest. These steps are idempotent for workflow reruns.
+GitHub Release with matching channel semantics. Prereleases are marked as
+prereleases and do not move npm `latest`; stable versions update `latest`.
+Registry verification retries propagation before tagging. These steps are
+idempotent for workflow reruns.
 
 If `NPM_TOKEN` is missing, the workflow exits successfully with a warning so
 normal CI stays green. After adding the secret, rerun the workflow manually:
@@ -120,6 +124,7 @@ Before tagging a release:
 
 - `npm run typecheck` passes
 - `npm test` passes
+- `npm run test:package` passes
 - optional signed-in `TOKENOMY_LIVE_EVAL=1 npm run test:live` evidence is
   reviewed for routing-policy changes
 - `pi --offline --approve --no-session --list-models openai-codex` loads the extension

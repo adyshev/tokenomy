@@ -4,9 +4,9 @@
   "provider": "openai-codex",
   "models": {
     "classifier": ["gpt-5.4-mini"],
-    "simple": ["gpt-5.4-mini"],
-    "medium": ["gpt-5.4", "gpt-5.4-mini"],
-    "complex": ["gpt-5.5", "gpt-5.4"]
+    "simple": ["gpt-5.4-mini", "gpt-5.6-luna", "gpt-5.4"],
+    "medium": ["gpt-5.6-terra", "gpt-5.4", "gpt-5.4-mini"],
+    "complex": ["gpt-5.6-sol", "gpt-5.5", "gpt-5.6-terra"]
   },
   "thinking": {
     "simple": "minimal",
@@ -66,7 +66,8 @@
   "budgets": {
     "sessionCredits": 0,
     "dailyCredits": 0,
-    "warnAtPercent": 80
+    "warnAtPercent": 80,
+    "policy": "warn"
   },
   "telemetry": {
     "enabled": true,
@@ -136,6 +137,8 @@
   "debug": {
     "dryRun": false,
     "trace": false,
-    "verbose": false
+    "verbose": false,
+    "retentionDays": 7,
+    "redact": true
   }
 }

@@ -1,7 +1,8 @@
 # Installation
 
-Tokenomy is distributed as a Pi package. After installation, it automatically
-routes Pi/Codex prompts to cheaper models when safe, upshifts for risky work,
+Tokenomy is distributed as a Pi package (not a native Codex CLI extension).
+After installation, it routes prompts through Pi's `openai-codex` provider to
+cheaper models when safe, upshifts for risky work,
 and uses local project memory plus prompt compression to reduce repeated token
 spend without changing the final user prompt.
 
@@ -21,13 +22,13 @@ compatibility as best-effort until that validation is complete.
 Recommended npm install:
 
 ```bash
-pi install npm:tokenomy-pi
+pi install npm:tokenomy-pi@beta
 ```
 
 Project-local npm install:
 
 ```bash
-pi install -l npm:tokenomy-pi
+pi install -l npm:tokenomy-pi@beta
 ```
 
 GitHub install also works:
@@ -51,7 +52,7 @@ pi install git:git@github.com:adyshev/tokenomy
 For a pinned release or commit:
 
 ```bash
-pi install https://github.com/adyshev/tokenomy@v0.1.13-beta
+pi install https://github.com/adyshev/tokenomy@v0.2.0-beta.1
 ```
 
 `pi install` reads the `pi` manifest from `package.json` and enables the
@@ -95,7 +96,9 @@ Manual copy still works, but `pi install` is preferred:
 ```bash
 mkdir -p .pi/extensions/tokenomy
 cp /path/to/tokenomy/.pi/extensions/tokenomy/index.ts .pi/extensions/tokenomy/index.ts
+cp -R /path/to/tokenomy/.pi/extensions/tokenomy/lib .pi/extensions/tokenomy/lib
 cp /path/to/tokenomy/.pi/tokenomy.json .pi/tokenomy.json
+cp /path/to/tokenomy/.pi/tokenomy.schema.json .pi/tokenomy.schema.json
 ```
 
 ## Verify
@@ -115,6 +118,7 @@ pi
 Inside Pi, run:
 
 ```text
+/tokenomy doctor
 /tokenomy status
 ```
 

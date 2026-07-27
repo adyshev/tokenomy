@@ -5,6 +5,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,6 +22,9 @@ const MODELS = [
   { provider: "openai-codex", id: "gpt-5.4" },
   { provider: "openai-codex", id: "gpt-5.4-mini" },
   { provider: "openai-codex", id: "gpt-5.5" },
+  { provider: "openai-codex", id: "gpt-5.6-sol" },
+  { provider: "openai-codex", id: "gpt-5.6-terra" },
+  { provider: "openai-codex", id: "gpt-5.6-luna" },
 ];
 
 test("package manifest declares Tokenomy as an installable Pi extension", () => {
@@ -31,6 +35,13 @@ test("package manifest declares Tokenomy as an installable Pi extension", () => 
     ".pi/extensions/tokenomy/index.ts",
   ]);
   assert.equal(manifest.scripts["test:live"], "node scripts/live-evaluation.mjs");
+  assert.equal(
+    manifest.scripts["test:economic"],
+    "node scripts/economic-evaluation.mjs",
+  );
+  assert.equal(manifest.scripts["test:package"], "node scripts/package-smoke.mjs");
+  assert.ok(manifest.files.includes(".pi/extensions/tokenomy"));
+  assert.ok(manifest.files.includes(".pi/tokenomy.schema.json"));
 });
 
 test("live evaluation stays explicitly opt-in", () => {
@@ -57,6 +68,23 @@ test("publish workflow verifies npm before creating tag and release", () => {
   assert.match(workflow, /contents: write/);
   assert.match(workflow, /git tag -a "\$tag"/);
   assert.match(workflow, /gh release create/);
+  assert.match(workflow, /for attempt in 1 2 3 4 5 6/);
+  assert.match(workflow, /prerelease_args\+=\(--prerelease\)/);
+  assert.doesNotMatch(workflow, /Sync default npm dist tag/);
+});
+
+test("economic evaluation is paired, fixed-baseline, and explicitly opt-in", () => {
+  const script = readFileSync("scripts/economic-evaluation.mjs", "utf8");
+  assert.match(script, /TOKENOMY_ECON_EVAL !== "1"/);
+  assert.match(script, /paired fresh-workspace, counterbalanced-order comparison/);
+  assert.match(script, /TOKENOMY_ECON_BASELINE_MODEL/);
+  assert.match(script, /const tokenomyFirst = index % 2 === 1/);
+});
+
+test("CI tests the packed package on Linux and macOS", () => {
+  const workflow = readFileSync(".github/workflows/ci.yml", "utf8");
+  assert.match(workflow, /ubuntu-latest, macos-latest/);
+  assert.match(workflow, /npm run test:package/);
 });
 
 function modelLabel(model) {
@@ -105,6 +133,7 @@ function createHarness(cwd, options = {}) {
   const notifications = [];
   const statuses = new Map();
   const compactions = [];
+  const confirmations = [];
   const models = options.models ?? MODELS;
   let currentThinking = options.initialThinking ?? "high";
 
@@ -144,6 +173,10 @@ function createHarness(cwd, options = {}) {
       },
       notify(message, type) {
         notifications.push({ message, type });
+      },
+      async confirm(title, message) {
+        confirmations.push({ title, message });
+        return options.confirmBudget ?? true;
       },
     },
   };
@@ -205,6 +238,7 @@ function createHarness(cwd, options = {}) {
     statuses,
     thinkingLevels,
     compactions,
+    confirmations,
   };
 }
 
@@ -1715,6 +1749,7 @@ test("writes opt-in debug trace entries with raw session data", async () => {
   const cwd = createProjectConfig({
     debug: {
       trace: true,
+      redact: false,
     },
   });
   const harness = createHarness(cwd);
@@ -1763,7 +1798,12 @@ test("writes opt-in debug trace entries with raw session data", async () => {
 });
 
 test("can enable, inspect, and disable debug trace by command", async () => {
-  const cwd = createProjectConfig();
+  const cwd = createProjectConfig({
+    debug: {
+      trace: false,
+      redact: false,
+    },
+  });
   const harness = createHarness(cwd);
   await startSession(harness);
 
@@ -2378,4 +2418,182 @@ test("dashboard shows trends, mode comparisons, and budget alerts", async () => 
   assert.match(dashboard, /7 days:/);
   assert.match(dashboard, /Mode comparison \(30 days\):/);
   assert.match(dashboard, /Account quota: unavailable/);
+});
+
+test("ships current GPT-5.6 defaults and a configuration schema", () => {
+  const config = JSON.parse(readFileSync(".pi/tokenomy.json", "utf8"));
+  const schema = JSON.parse(readFileSync(".pi/tokenomy.schema.json", "utf8"));
+
+  assert.equal(config.models.medium[0], "gpt-5.6-terra");
+  assert.equal(config.models.complex[0], "gpt-5.6-sol");
+  assert.ok(config.models.simple.includes("gpt-5.6-luna"));
+  assert.equal(schema.additionalProperties, false);
+  assert.deepEqual(schema.properties.budgets.properties.policy.enum, [
+    "warn",
+    "save",
+    "ask",
+  ]);
+});
+
+test("ignores unknown and malformed config values without crashing", async () => {
+  const harness = createHarness(
+    createProjectConfig({
+      models: "not-an-object",
+      mysterySetting: true,
+    }),
+  );
+
+  await startSession(harness);
+
+  const warning = harness.notifications.find(({ message }) =>
+    message.includes("config warnings"),
+  );
+  assert.match(warning.message, /models has invalid type/);
+  assert.match(warning.message, /mysterySetting is unknown and was ignored/);
+});
+
+test("doctor checks config, configured models, storage, schema, and rate card", async () => {
+  const cwd = createProjectConfig();
+  writeFileSync(
+    join(cwd, ".pi/tokenomy.schema.json"),
+    readFileSync(".pi/tokenomy.schema.json", "utf8"),
+  );
+  const harness = createHarness(cwd);
+  await startSession(harness);
+
+  await runTokenomyCommand(harness, "doctor");
+
+  const report = harness.notifications.at(-1).message;
+  assert.match(report, /Tokenomy doctor: healthy/);
+  assert.match(report, /PASS configuration/);
+  assert.match(report, /PASS models/);
+  assert.match(report, /PASS storage/);
+  assert.match(report, /PASS schema/);
+  assert.match(report, /PASS rate card/);
+});
+
+test("save budget policy downshifts normal work after threshold", async () => {
+  const harness = createHarness(
+    createProjectConfig({
+      budgets: {
+        sessionCredits: 0.0001,
+        dailyCredits: 0,
+        warnAtPercent: 80,
+        policy: "save",
+      },
+    }),
+  );
+  await startSession(harness);
+  await routePrompt(harness, "What does HTTP 204 mean?");
+  await finishAgent(harness, {
+    messages: [assistantMessage("gpt-5.4-mini")],
+  });
+
+  await routePrompt(
+    harness,
+    "Update the package configuration and verify the focused tests.",
+  );
+  await runTokenomyCommand(harness, "explain");
+
+  assert.match(harness.notifications.at(-1).message, /budget policy save downshifted/);
+  assert.equal(harness.selectedModels.at(-1), "openai-codex/gpt-5.4-mini");
+});
+
+test("ask budget policy honors the user's per-turn choice", async () => {
+  const harness = createHarness(
+    createProjectConfig({
+      budgets: {
+        sessionCredits: 0.0001,
+        dailyCredits: 0,
+        warnAtPercent: 80,
+        policy: "ask",
+      },
+    }),
+    { confirmBudget: false },
+  );
+  await startSession(harness);
+  await routePrompt(harness, "What does HTTP 204 mean?");
+  await finishAgent(harness, {
+    messages: [assistantMessage("gpt-5.4-mini")],
+  });
+
+  await routePrompt(
+    harness,
+    "Update the package configuration and verify the focused tests.",
+  );
+
+  assert.equal(harness.confirmations.length, 1);
+  assert.equal(harness.selectedModels.at(-1), "openai-codex/gpt-5.4-mini");
+});
+
+test("budget policy never downshifts high-risk release work", async () => {
+  const harness = createHarness(
+    createProjectConfig({
+      budgets: {
+        sessionCredits: 0.0001,
+        dailyCredits: 0,
+        warnAtPercent: 80,
+        policy: "save",
+      },
+    }),
+  );
+  await startSession(harness);
+  await routePrompt(harness, "What does HTTP 204 mean?");
+  await finishAgent(harness, {
+    messages: [assistantMessage("gpt-5.4-mini")],
+  });
+
+  await routePrompt(
+    harness,
+    "Publish the release to npm, create the git tag, and verify production.",
+  );
+  await runTokenomyCommand(harness, "explain");
+
+  assert.equal(harness.selectedModels.at(-1), "openai-codex/gpt-5.5");
+  assert.match(harness.notifications.at(-1).message, /Tier: complex/);
+  assert.doesNotMatch(harness.notifications.at(-1).message, /budget policy/);
+});
+
+test("debug traces are redacted and private by default and can be purged", async () => {
+  const cwd = createProjectConfig({
+    debug: {
+      trace: true,
+      redact: true,
+      retentionDays: 7,
+    },
+  });
+  const harness = createHarness(cwd);
+  await startSession(harness);
+  await routePrompt(harness, "secret-debug-marker-4242 explain this");
+
+  const directory = join(cwd, ".pi/tokenomy-cache/debug");
+  const name = readdirSync(directory).find((entry) => entry.endsWith(".jsonl"));
+  const path = join(directory, name);
+  assert.doesNotMatch(readFileSync(path, "utf8"), /secret-debug-marker-4242/);
+  if (process.platform !== "win32") {
+    assert.equal(statSync(path).mode & 0o777, 0o600);
+    assert.equal(statSync(directory).mode & 0o777, 0o700);
+  }
+
+  await runTokenomyCommand(harness, "debug purge");
+  assert.match(harness.notifications.at(-1).message, /removed 1 debug trace file/);
+  assert.equal(readdirSync(directory).filter((entry) => entry.endsWith(".jsonl")).length, 0);
+});
+
+test("persistent state uses atomic writes without leftover temporary files", async () => {
+  const cwd = createProjectConfig();
+  const harness = createHarness(cwd);
+  await startSession(harness);
+  await routePrompt(harness, "What does HTTP 204 mean?");
+
+  const cache = join(cwd, ".pi/tokenomy-cache");
+  for (const name of readdirSync(cache)) {
+    assert.doesNotMatch(name, /\.tmp-|\.lock$/);
+    if (name.endsWith(".json")) {
+      assert.doesNotThrow(() => JSON.parse(readFileSync(join(cache, name), "utf8")));
+      if (process.platform !== "win32") {
+        assert.equal(statSync(join(cache, name)).mode & 0o777, 0o600);
+      }
+    }
+  }
 });
