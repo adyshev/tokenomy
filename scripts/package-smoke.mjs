@@ -15,8 +15,14 @@ const npmEnvironment = {
   ...process.env,
   npm_config_cache: join(workspace, ".npm-cache"),
 };
-const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
-const packed = spawnSync(npmCommand, ["pack", "--pack-destination", workspace], {
+function runNpm(args, options) {
+  const npmCli = process.env.npm_execpath;
+  return npmCli
+    ? spawnSync(process.execPath, [npmCli, ...args], options)
+    : spawnSync("npm", args, options);
+}
+
+const packed = runNpm(["pack", "--pack-destination", workspace], {
   cwd: root,
   encoding: "utf8",
   env: npmEnvironment,
@@ -34,8 +40,7 @@ writeFileSync(
   join(workspace, "package.json"),
   '{"name":"tokenomy-package-smoke","private":true}\n',
 );
-const installed = spawnSync(
-    npmCommand,
+const installed = runNpm(
   [
     "install",
     "--ignore-scripts",

@@ -94,7 +94,8 @@ test("CI tests the packed package on Linux, macOS, and Windows", () => {
   const packageSmoke = readFileSync("scripts/package-smoke.mjs", "utf8");
   assert.match(workflow, /ubuntu-latest, macos-latest, windows-latest/);
   assert.match(workflow, /npm run test:package/);
-  assert.match(packageSmoke, /process\.platform === "win32" \? "npm\.cmd" : "npm"/);
+  assert.match(packageSmoke, /process\.env\.npm_execpath/);
+  assert.match(packageSmoke, /spawnSync\(process\.execPath, \[npmCli, \.\.\.args\]/);
 });
 
 function modelLabel(model) {
