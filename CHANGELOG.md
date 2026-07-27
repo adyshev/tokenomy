@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.1.25-beta - 2026-07-27
+
+- Added verified `success|partial|failure` feedback, multilingual correction
+  detection, and an opt-in independent quality evaluator.
+- Added deterministic economy-mode experiments, no-cost shadow tiers, and
+  per-mode prompt/completion/success/credit rollups.
+- Added local routing support for Ukrainian, Russian, Spanish, French, German,
+  and Portuguese instructions.
+- Added provider allowlists, provider-qualified multi-provider routing,
+  optional live model discovery, and validated external rate-card loading.
+- Added a validated account-quota snapshot adapter and `/tokenomy quota`;
+  unavailable personal ChatGPT Plus totals are never guessed.
+- Added tool-result token/character measurement, duplicate detection, and
+  opt-in head/tail truncation for oversized results.
+- Added measured compaction before/after/saved token counters.
+- Added `/tokenomy dashboard`, 7/30-day trends, session/daily credit alerts,
+  quality evidence, and mode comparisons.
+- Added an opt-in signed-in end-to-end evaluation runner and manual
+  self-hosted workflow with uploaded evidence.
+- Upgraded telemetry rollups to schema version 3 while retaining v2 data.
+- Automated npm verification, matching `v<version>` tag creation, and
+  idempotent latest GitHub Release creation in the publish workflow.
+- Clarified that ChatGPT Plus is Tokenomy's live-tested subscription target;
+  ChatGPT Pro is expected to be compatible but remains unvalidated.
+- Expanded the integration suite from 60 to 73 tests.
+
 ## 0.1.24-beta - 2026-07-27
 
 - Added `save`, `balanced`, and `quality` economy modes, configurable
@@ -98,8 +124,8 @@
 
 ## 0.1.13-beta - 2026-07-08
 - Improved the npm/GitHub package description and README introduction to state
-  Tokenomy's user-facing goal, default benefits, Plus/Pro Codex scope, local
-  memory, compression, safety guards, and telemetry.
+  Tokenomy's user-facing goal, default benefits, Codex subscription scope,
+  local memory, compression, safety guards, and telemetry.
 
 ## 0.1.12-beta - 2026-07-08
 - Added default-on local project memory with automatic safe fact discovery and advisory injection.

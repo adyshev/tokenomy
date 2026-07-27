@@ -1,6 +1,6 @@
 {
   "name": "tokenomy-pi",
-  "version": "0.1.24-beta",
+  "version": "0.1.25-beta",
   "description": "Automatic token-saving router for Pi/Codex that uses cheaper models when safe and preserves quality with confidence checks, local memory, and prompt compression.",
   "license": "MIT",
   "type": "module",
@@ -24,6 +24,7 @@
     "LIMITATIONS.md",
     "SECURITY.md",
     "CHANGELOG.md",
+    "scripts/live-evaluation.mjs",
     "tsconfig.json",
     "types/tokenshrink.d.ts",
     "LICENSE"
@@ -33,6 +34,7 @@
   },
   "scripts": {
     "test": "node --experimental-strip-types --loader ./tests/pi-extension-loader.mjs --test tests/*.test.mjs",
+    "test:live": "node scripts/live-evaluation.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "json:check": "node -e \"for (const f of ['.pi/tokenomy.json','.pi/settings.json','package.json']) JSON.parse(require('fs').readFileSync(f,'utf8')); console.log('json ok')\"",
     "pi:check": "pi --offline --approve --no-session --list-models openai-codex"

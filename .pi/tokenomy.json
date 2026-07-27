@@ -36,6 +36,38 @@
       "gpt-5.2-codex": { "input": 43.75, "cacheRead": 4.375, "output": 350 }
     }
   },
+  "quality": {
+    "correctionDetection": true,
+    "evaluatorEnabled": false,
+    "evaluatorModels": ["gpt-5.4-mini"],
+    "evaluatorMaxPromptChars": 4000,
+    "evaluatorMaxOutputChars": 6000,
+    "minEvaluatorScore": 0.8
+  },
+  "experiments": {
+    "enabled": false,
+    "sampleRate": 1,
+    "modes": ["save", "balanced", "quality"]
+  },
+  "providers": {
+    "allowed": ["openai-codex"],
+    "autoDiscoverModels": false
+  },
+  "registry": {
+    "rateCardPath": ".pi/tokenomy-rate-card.json",
+    "rateCardUrl": "",
+    "refreshHours": 24,
+    "maxAgeDays": 30
+  },
+  "quota": {
+    "accountSnapshotPath": ".pi/tokenomy-account-quota.json",
+    "staleAfterMinutes": 60
+  },
+  "budgets": {
+    "sessionCredits": 0,
+    "dailyCredits": 0,
+    "warnAtPercent": 80
+  },
   "telemetry": {
     "enabled": true,
     "maxEntries": 200,
@@ -68,6 +100,16 @@
     "preserveCustomTools": true,
     "readOnlyTools": ["read", "grep", "find", "ls"],
     "writeTools": ["read", "grep", "find", "ls", "edit", "write", "bash"]
+  },
+  "toolEconomy": {
+    "measureResults": true,
+    "truncateOversized": false,
+    "maxResultTokens": 6000,
+    "preserveHeadChars": 12000,
+    "preserveTailChars": 6000
+  },
+  "languages": {
+    "enabled": ["en", "uk", "ru", "es", "fr", "de", "pt"]
   },
   "routing": {
     "restoreModelAfterPrompt": true,

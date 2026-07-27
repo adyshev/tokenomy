@@ -1,0 +1,45 @@
+name: Live Tokenomy Evaluation
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: Signed-in Pi model to use
+        required: true
+        default: openai-codex/gpt-5.5
+
+permissions:
+  contents: read
+
+jobs:
+  live-evaluation:
+    name: Signed-in end-to-end evaluation
+    runs-on: self-hosted
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run opt-in live evaluation
+        env:
+          TOKENOMY_LIVE_EVAL: "1"
+          TOKENOMY_LIVE_MODEL: ${{ inputs.model }}
+          TOKENOMY_LIVE_EVAL_OUTPUT: ${{ runner.temp }}/tokenomy-live-evidence.json
+        run: npm run test:live
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tokenomy-live-evidence
+          path: ${{ runner.temp }}/tokenomy-live-evidence.json
+          if-no-files-found: warn

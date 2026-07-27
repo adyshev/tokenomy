@@ -30,6 +30,33 @@ test("package manifest declares Tokenomy as an installable Pi extension", () => 
   assert.deepEqual(manifest.pi.extensions, [
     ".pi/extensions/tokenomy/index.ts",
   ]);
+  assert.equal(manifest.scripts["test:live"], "node scripts/live-evaluation.mjs");
+});
+
+test("live evaluation stays explicitly opt-in", () => {
+  const script = readFileSync("scripts/live-evaluation.mjs", "utf8");
+  const workflow = readFileSync(
+    ".github/workflows/live-evaluation.yml",
+    "utf8",
+  );
+  assert.match(script, /TOKENOMY_LIVE_EVAL !== "1"/);
+  assert.match(script, /tokenomy-live-evidence\.json/);
+  assert.match(workflow, /runs-on: self-hosted/);
+  assert.match(workflow, /workflow_dispatch/);
+});
+
+test("publish workflow verifies npm before creating tag and release", () => {
+  const workflow = readFileSync(
+    ".github/workflows/npm-publish.yml",
+    "utf8",
+  );
+  const verify = workflow.indexOf("Verify package is available from npm");
+  const tag = workflow.indexOf("Create and push release tag");
+  const release = workflow.indexOf("Create or update GitHub Release");
+  assert.ok(verify > 0 && tag > verify && release > tag);
+  assert.match(workflow, /contents: write/);
+  assert.match(workflow, /git tag -a "\$tag"/);
+  assert.match(workflow, /gh release create/);
 });
 
 function modelLabel(model) {
@@ -485,7 +512,7 @@ test("records prompt-safe routing history", async () => {
   assert.equal(rollups.lifetime.prompts, 1);
   assert.equal(rollups.daily[today].prompts, 1);
   assert.equal(rollups.monthly[month].prompts, 1);
-  assert.equal(rollups.version, 2);
+  assert.equal(rollups.version, 3);
   assert.equal(rollups.lifetime.turnsMeasured, 1);
   assert.equal(rollups.lifetime.turnsUsageUnavailable, 0);
   assert.equal(rollups.lifetime.inputTokens, 900);
@@ -554,7 +581,7 @@ test("marks a settled turn unavailable when Pi provides no usage", async () => {
   assert.equal(rollups.lifetime.turnsUsageUnavailable, 1);
 });
 
-test("bypasses non-English prompts transparently", async () => {
+test("routes supported Ukrainian prompts locally", async () => {
   const harness = createHarness(createProjectConfig());
   await startSession(harness);
   const startupModelCount = harness.selectedModels.length;
@@ -563,11 +590,27 @@ test("bypasses non-English prompts transparently", async () => {
   inputPrompt(harness, "будь ласка зроби аудит проекту");
   const result = await routePrompt(harness, "будь ласка зроби аудит проекту");
 
+  assert.ok(result?.systemPrompt.includes("Tokenomy token discipline"));
+  assert.ok(harness.selectedModels.length >= startupModelCount);
+  assert.ok(harness.thinkingLevels.length > 0);
+  assert.match(harness.notifications.at(-1).message, /Tokenomy:/);
+  assert.equal(harness.statuses.get("tokenomy"), startupStatus);
+  const history = JSON.parse(
+    readFileSync(
+      join(harness.ctx.cwd, ".pi/tokenomy-cache/routing-history.json"),
+      "utf8",
+    ),
+  );
+  assert.equal(history.entries[0].language, "uk");
+});
+
+test("still bypasses unsupported scripts transparently", async () => {
+  const harness = createHarness(createProjectConfig());
+  await startSession(harness);
+  const startupModelCount = harness.selectedModels.length;
+  const result = await routePrompt(harness, "このプロジェクトを監査してください");
   assert.equal(result, undefined);
   assert.equal(harness.selectedModels.length, startupModelCount);
-  assert.equal(harness.thinkingLevels.length, 0);
-  assert.equal(harness.notifications.length, 0);
-  assert.equal(harness.statuses.get("tokenomy"), startupStatus);
   assert.equal(
     existsSync(join(harness.ctx.cwd, ".pi/tokenomy-cache/routing-history.json")),
     false,
@@ -2023,4 +2066,316 @@ test("auto-compacts high context with cooldown and records compactions", async (
     ),
   );
   assert.equal(rollups.lifetime.compactions, 1);
+});
+
+test("records explicit quality feedback and detects correction prompts", async () => {
+  const harness = createHarness(createProjectConfig());
+  await startSession(harness);
+  await routePrompt(harness, "Explain what this helper does.");
+  await finishAgent(harness, {
+    messages: [assistantMessage("gpt-5.4-mini")],
+  });
+
+  await runTokenomyCommand(harness, "feedback success");
+  inputPrompt(harness, "No, that's wrong. Please redo that.");
+
+  const history = JSON.parse(
+    readFileSync(
+      join(harness.ctx.cwd, ".pi/tokenomy-cache/routing-history.json"),
+      "utf8",
+    ),
+  );
+  const rollups = JSON.parse(
+    readFileSync(
+      join(harness.ctx.cwd, ".pi/tokenomy-cache/telemetry-rollups.json"),
+      "utf8",
+    ),
+  );
+  assert.equal(history.entries[0].feedback, "success");
+  assert.equal(history.entries[0].correctionDetected, true);
+  assert.equal(rollups.lifetime.verifiedSuccessTurns, 1);
+  assert.equal(rollups.lifetime.correctionsDetected, 1);
+});
+
+test("runs the independent quality evaluator only when opted in", async () => {
+  completeCalls.length = 0;
+  process.env.TOKENOMY_TEST_CLASSIFIER_RESPONSE =
+    '{"score":0.92,"reason":"task completed correctly"}';
+  const harness = createHarness(
+    createProjectConfig({
+      quality: {
+        evaluatorEnabled: true,
+        evaluatorModels: ["gpt-5.4-mini"],
+      },
+    }),
+    {
+      classifierAuth: { ok: true, apiKey: "test-key", headers: {}, env: {} },
+    },
+  );
+  await startSession(harness);
+  await routePrompt(harness, "What does HTTP 204 mean?");
+  await finishAgent(harness, {
+    messages: [assistantMessage("gpt-5.4-mini")],
+  });
+
+  const history = JSON.parse(
+    readFileSync(
+      join(harness.ctx.cwd, ".pi/tokenomy-cache/routing-history.json"),
+      "utf8",
+    ),
+  );
+  assert.equal(history.entries[0].evaluatorStatus, "measured");
+  assert.equal(history.entries[0].evaluatorScore, 0.92);
+  assert.equal(completeCalls.length, 1);
+  delete process.env.TOKENOMY_TEST_CLASSIFIER_RESPONSE;
+});
+
+test("loads a validated external rate card", async () => {
+  const cwd = createProjectConfig();
+  writeFileSync(
+    join(cwd, ".pi/tokenomy-rate-card.json"),
+    `${JSON.stringify({
+      version: 1,
+      effectiveAt: new Date().toISOString(),
+      source: "test-fixture",
+      rates: {
+        "gpt-5.4-mini": { input: 100, cacheRead: 10, output: 200 },
+      },
+    })}\n`,
+    "utf8",
+  );
+  const harness = createHarness(cwd);
+  await startSession(harness);
+  await routePrompt(harness, "What does HTTP 204 mean?");
+  await finishAgent(harness, {
+    messages: [
+      assistantMessage("gpt-5.4-mini", {
+        input: 1_000_000,
+        output: 0,
+        cacheRead: 0,
+        totalTokens: 1_000_000,
+      }),
+    ],
+  });
+  const rollups = JSON.parse(
+    readFileSync(
+      join(cwd, ".pi/tokenomy-cache/telemetry-rollups.json"),
+      "utf8",
+    ),
+  );
+  assert.equal(rollups.lifetime.estimatedPlanCredits, 100);
+  await runTokenomyCommand(harness, "report 7d");
+  assert.match(harness.notifications.at(-1).message, /rate card external:/);
+});
+
+test("refreshes an external rate card from an explicit HTTPS endpoint", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    async text() {
+      return JSON.stringify({
+        version: 1,
+        effectiveAt: new Date().toISOString(),
+        source: "https://rates.example.test/tokenomy.json",
+        rates: {
+          "gpt-5.4-mini": { input: 9, cacheRead: 1, output: 20 },
+        },
+      });
+    },
+  });
+  try {
+    const cwd = createProjectConfig({
+      registry: {
+        rateCardPath: ".pi/tokenomy-rate-card.json",
+        rateCardUrl: "https://rates.example.test/tokenomy.json",
+        refreshHours: 24,
+        maxAgeDays: 30,
+      },
+    });
+    const harness = createHarness(cwd);
+    await startSession(harness);
+    const card = JSON.parse(
+      readFileSync(join(cwd, ".pi/tokenomy-rate-card.json"), "utf8"),
+    );
+    assert.equal(card.rates["gpt-5.4-mini"].input, 9);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("shows account quota only from a validated adapter snapshot", async () => {
+  const cwd = createProjectConfig();
+  writeFileSync(
+    join(cwd, ".pi/tokenomy-account-quota.json"),
+    `${JSON.stringify({
+      version: 1,
+      scope: "account",
+      source: "user",
+      authoritative: false,
+      updatedAt: new Date().toISOString(),
+      windows: [
+        {
+          name: "ChatGPT Plus rolling window",
+          used: 40,
+          limit: 100,
+          remaining: 60,
+          unit: "percent",
+        },
+      ],
+    })}\n`,
+    "utf8",
+  );
+  const harness = createHarness(cwd);
+  await startSession(harness);
+  await runTokenomyCommand(harness, "quota");
+  assert.match(harness.notifications.at(-1).message, /user-supplied via user/);
+  assert.match(harness.notifications.at(-1).message, /remaining 60 percent/);
+});
+
+test("assigns deterministic mode experiments and records shadow tiers", async () => {
+  const cwd = createProjectConfig({
+    experiments: {
+      enabled: true,
+      sampleRate: 1,
+      modes: ["save", "balanced", "quality"],
+    },
+  });
+  const harness = createHarness(cwd);
+  await startSession(harness);
+  await routePrompt(
+    harness,
+    "Please inspect this project question carefully and explain the likely issue.",
+  );
+  const history = JSON.parse(
+    readFileSync(
+      join(cwd, ".pi/tokenomy-cache/routing-history.json"),
+      "utf8",
+    ),
+  );
+  assert.match(history.entries[0].experimentCohort, /^mode:/);
+  assert.deepEqual(Object.keys(history.entries[0].shadowTiers).sort(), [
+    "balanced",
+    "quality",
+    "save",
+  ]);
+});
+
+test("supports configured non-OpenAI providers", async () => {
+  const models = [
+    { provider: "anthropic", id: "claude-haiku" },
+    { provider: "anthropic", id: "claude-sonnet" },
+  ];
+  const harness = createHarness(
+    createProjectConfig({
+      provider: "anthropic",
+      providers: { allowed: ["anthropic"], autoDiscoverModels: false },
+      models: {
+        classifier: ["anthropic/claude-haiku"],
+        simple: ["anthropic/claude-haiku"],
+        medium: ["anthropic/claude-sonnet"],
+        complex: ["anthropic/claude-sonnet"],
+      },
+    }),
+    { models },
+  );
+  await startSession(harness);
+  await routePrompt(harness, "What does HTTP 204 mean?");
+  assert.equal(harness.selectedModels.at(-1), "anthropic/claude-haiku");
+});
+
+test("measures duplicate and oversized tool results and can truncate opt-in", async () => {
+  const harness = createHarness(
+    createProjectConfig({
+      toolEconomy: {
+        measureResults: true,
+        truncateOversized: true,
+        maxResultTokens: 100,
+        preserveHeadChars: 120,
+        preserveTailChars: 80,
+      },
+    }),
+  );
+  await startSession(harness);
+  await routePrompt(harness, "Inspect the project logs.");
+  const event = {
+    toolName: "bash",
+    input: { command: "npm test" },
+    content: [{ type: "text", text: "long output ".repeat(500) }],
+  };
+  const first = harness.handlers.get("tool_result")(event, harness.ctx);
+  harness.handlers.get("tool_result")(event, harness.ctx);
+  assert.match(first.content[0].text, /oversized tool result truncated/);
+  await finishAgent(harness, {
+    messages: [assistantMessage("gpt-5.4-mini")],
+  });
+  const rollups = JSON.parse(
+    readFileSync(
+      join(harness.ctx.cwd, ".pi/tokenomy-cache/telemetry-rollups.json"),
+      "utf8",
+    ),
+  );
+  assert.equal(rollups.lifetime.duplicateToolCalls, 1);
+  assert.equal(rollups.lifetime.oversizedToolResults, 2);
+  assert.equal(rollups.lifetime.truncatedToolResults, 2);
+  assert.ok(rollups.lifetime.toolOutputTokens > 100);
+  assert.ok(rollups.lifetime.toolOutputTokensSaved > 100);
+});
+
+test("records measured compaction savings", async () => {
+  const contextUsage = {
+    tokens: 180_000,
+    contextWindow: 200_000,
+    percent: 90,
+  };
+  const harness = createHarness(createProjectConfig(), { contextUsage });
+  await startSession(harness);
+  contextUsage.tokens = 30_000;
+  contextUsage.percent = 15;
+  harness.handlers.get("session_compact")(
+    {
+      type: "session_compact",
+      compactionEntry: { tokensBefore: 180_000 },
+      fromExtension: false,
+      reason: "manual",
+      willRetry: false,
+    },
+    harness.ctx,
+  );
+  const rollups = JSON.parse(
+    readFileSync(
+      join(harness.ctx.cwd, ".pi/tokenomy-cache/telemetry-rollups.json"),
+      "utf8",
+    ),
+  );
+  assert.equal(rollups.lifetime.compactionTokensBefore, 180_000);
+  assert.equal(rollups.lifetime.compactionTokensAfter, 30_000);
+  assert.equal(rollups.lifetime.compactionTokensSaved, 150_000);
+});
+
+test("dashboard shows trends, mode comparisons, and budget alerts", async () => {
+  const harness = createHarness(
+    createProjectConfig({
+      budgets: {
+        sessionCredits: 0.01,
+        dailyCredits: 0.01,
+        warnAtPercent: 80,
+      },
+    }),
+  );
+  await startSession(harness);
+  await routePrompt(harness, "What does HTTP 204 mean?");
+  await finishAgent(harness, {
+    messages: [assistantMessage("gpt-5.4-mini")],
+  });
+  assert.ok(
+    harness.notifications.some(({ message }) =>
+      message.includes("budget alert"),
+    ),
+  );
+  await runTokenomyCommand(harness, "dashboard");
+  const dashboard = harness.notifications.at(-1).message;
+  assert.match(dashboard, /7 days:/);
+  assert.match(dashboard, /Mode comparison \(30 days\):/);
+  assert.match(dashboard, /Account quota: unavailable/);
 });

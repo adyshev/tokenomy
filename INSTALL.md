@@ -9,8 +9,12 @@ spend without changing the final user prompt.
 
 - Pi installed and working locally
 - Node.js 22.19 or newer
-- ChatGPT Plus/Pro Codex access authenticated in Pi
+- ChatGPT Plus Codex access authenticated in Pi (the live-tested setup)
 - `openai-codex` models available in `pi --list-models openai-codex`
+
+ChatGPT Pro is expected to use the same Codex provider and rate card, but the
+project has not yet run its live evaluation suite on a Pro account. Treat Pro
+compatibility as best-effort until that validation is complete.
 
 ## Install with Pi
 
