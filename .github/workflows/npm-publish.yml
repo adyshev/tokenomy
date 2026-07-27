@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 jobs:
@@ -18,6 +18,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -96,3 +98,40 @@ jobs:
       - name: Skip already published version
         if: steps.published.outputs.exists == 'true'
         run: echo "${{ steps.package.outputs.name }}@${{ steps.package.outputs.version }} is already published; skipping."
+
+      - name: Verify package is available from npm
+        id: verify
+        if: steps.published.outputs.exists == 'true' || steps.npm-token.outputs.configured == 'true'
+        run: |
+          expected="${{ steps.package.outputs.version }}"
+          actual="$(npm view "${{ steps.package.outputs.name }}@$expected" version)"
+          test "$actual" = "$expected"
+          echo "published=true" >> "$GITHUB_OUTPUT"
+
+      - name: Create and push release tag
+        if: steps.verify.outputs.published == 'true'
+        env:
+          VERSION: ${{ steps.package.outputs.version }}
+        run: |
+          tag="v$VERSION"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            git fetch origin "refs/tags/$tag:refs/tags/$tag"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$tag" -m "Release $tag"
+            git push origin "$tag"
+          fi
+
+      - name: Create or update GitHub Release
+        if: steps.verify.outputs.published == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.package.outputs.version }}
+        run: |
+          tag="v$VERSION"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release edit "$tag" --latest --title "$tag"
+          else
+            gh release create "$tag" --verify-tag --generate-notes --latest --title "$tag"
+          fi

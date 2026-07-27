@@ -3,11 +3,12 @@
 Tokenomy is beta software. It is useful today, but the routing policy is still
 heuristic and should be treated as advisory rather than perfect.
 
-## Codex-Only Defaults
+## Codex-Focused Defaults
 
 The default config targets Pi's `openai-codex` provider and the Codex model IDs
-available to ChatGPT Plus/Pro users. Other providers may work only after
-customizing `.pi/tokenomy.json`.
+available to ChatGPT Plus/Pro users. Other providers require provider-qualified
+model IDs and an explicit `providers.allowed` entry. Cost/credit comparisons
+also require suitable rate-card entries.
 
 ## Heuristic Routing
 
@@ -18,13 +19,12 @@ or `review` appear in casual language.
 Classifier routing can improve ambiguous cases, but classifier output is only
 accepted above the configured confidence threshold.
 
-## English-Only Routing
+## Language Coverage
 
-Tokenomy currently routes English-language instructions only. Prompts written
-primarily in other languages bypass Tokenomy for that turn so the extension does
-not apply English keyword heuristics incorrectly. English instructions can still
-contain non-English payload text, for example text to translate or comments to
-preserve.
+Tokenomy has local routing dictionaries for English, Ukrainian, Russian,
+Spanish, French, German, and Portuguese. These dictionaries cover common
+coding-agent intents, not every phrase or dialect. Unknown scripts bypass
+routing so the extension does not apply unsupported keyword heuristics.
 
 ## Project Memory
 
@@ -51,11 +51,14 @@ requests, and Pi-reported cost. A settled turn with no usable provider data is
 marked `unavailable` instead of being estimated from prompt characters.
 
 The ChatGPT plan-credit conversion is still an estimate. It uses a versioned
-local copy of the OpenAI Codex rate card, which can be overridden in config,
-and may become stale when OpenAI changes plan pricing or model IDs. Reports
+local copy of the OpenAI Codex rate card or a validated project-local external
+rate card, and may become stale when OpenAI changes plan pricing or model IDs. Reports
 cover only Tokenomy turns in the current Pi project; they are not account-wide
 quota or billing reports. `/tokenomy limits` can only show recognized response
 headers exposed to this Pi process, so it may be unavailable or incomplete.
+`/tokenomy quota` can display a user/companion/Enterprise Analytics snapshot,
+but Tokenomy has no public API for personal ChatGPT Plus quota totals and never
+manufactures missing limits.
 
 Telemetry created before schema version 2 may contain model-rank-based
 `estimatedTokensSaved` and cost-unit fields. These are retained for migration
@@ -63,17 +66,22 @@ but labeled as legacy proxies, never as measured tokens or credits.
 
 ## Quality Measurement
 
-Tokenomy records a completion proxy from Pi stop reasons, tool errors, and retry
-runs. This supports cost-per-completed-turn monitoring, but it is not an
-independent task-success evaluation and cannot prove that a cheaper route
-preserved quality. User-rated or evaluator-backed success measurement remains
-required before making causal savings claims.
+Tokenomy records completion proxies, explicit user feedback, correction
+signals, and—when opted in—an independent model evaluator. Feedback is still
+subjective, corrections can be missed, and model evaluation is not ground
+truth. A/B cohorts are deterministic but observational unless prompts are
+assigned in a controlled study, so causal savings claims require sufficient
+sample size and comparable tasks.
 
 ## Context Compaction
 
 Automatic compaction is disabled by default. Compaction saves future context
 tokens but is lossy, so users should review the task-preservation instructions
 before enabling `contextEconomy.autoCompact`.
+
+Oversized tool-result truncation is also disabled by default. When enabled it
+preserves configured head/tail regions, but relevant content can still exist in
+the removed middle.
 
 ## Model Availability
 
@@ -91,7 +99,9 @@ config still lives in `.pi/tokenomy.json`.
 
 ## Test Environment
 
-Tests use a mocked Pi runtime and local Pi package resolution. They verify
+Normal tests use a mocked Pi runtime and local Pi package resolution. They verify
 routing logic, current `agent_end`/`agent_settled` behavior, measured usage
 aggregation, and state restoration. They do not perform live model calls,
-account-limit integration, or end-to-end terminal UI assertions.
+personal account-limit integration, or terminal UI assertions. The separate
+`TOKENOMY_LIVE_EVAL=1 npm run test:live` suite performs signed-in model calls
+and consumes real quota; it is never run by normal CI.

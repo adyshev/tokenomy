@@ -6,7 +6,7 @@ import {
   readFileSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { complete, type Api, type Model } from "@earendil-works/pi-ai/compat";
 import nlp from "compromise/three";
 import { compress as shrinkPrompt, countTokens } from "tokenshrink";
@@ -42,6 +42,8 @@ type PromptIntent =
   | "release";
 type RiskLevel = "low" | "medium" | "high";
 type TurnOutcome = "completed" | "failed" | "aborted" | "unknown";
+type FeedbackRating = "success" | "partial" | "failure";
+type RoutingLanguage = "en" | "uk" | "ru" | "es" | "fr" | "de" | "pt" | "unknown";
 
 type ModelSpec = string;
 
@@ -69,6 +71,38 @@ interface TokenomyConfig {
     enabled: boolean;
     rateCardVersion: string;
     rates: Record<string, CreditRates>;
+  };
+  quality: {
+    correctionDetection: boolean;
+    evaluatorEnabled: boolean;
+    evaluatorModels: ModelSpec[];
+    evaluatorMaxPromptChars: number;
+    evaluatorMaxOutputChars: number;
+    minEvaluatorScore: number;
+  };
+  experiments: {
+    enabled: boolean;
+    sampleRate: number;
+    modes: EconomyMode[];
+  };
+  providers: {
+    allowed: string[];
+    autoDiscoverModels: boolean;
+  };
+  registry: {
+    rateCardPath: string;
+    rateCardUrl: string;
+    refreshHours: number;
+    maxAgeDays: number;
+  };
+  quota: {
+    accountSnapshotPath: string;
+    staleAfterMinutes: number;
+  };
+  budgets: {
+    sessionCredits: number;
+    dailyCredits: number;
+    warnAtPercent: number;
   };
   cache: {
     enabled: boolean;
@@ -123,6 +157,16 @@ interface TokenomyConfig {
     preserveCustomTools: boolean;
     readOnlyTools: string[];
     writeTools: string[];
+  };
+  toolEconomy: {
+    measureResults: boolean;
+    truncateOversized: boolean;
+    maxResultTokens: number;
+    preserveHeadChars: number;
+    preserveTailChars: number;
+  };
+  languages: {
+    enabled: RoutingLanguage[];
   };
   debug: {
     dryRun: boolean;
@@ -184,6 +228,7 @@ interface LocalAnalysis {
   score: number;
   signals: string[];
   estimatedClassifierTokens: number;
+  language: RoutingLanguage;
 }
 
 interface RouterDecision {
@@ -198,6 +243,9 @@ interface RouterDecision {
   model?: string;
   promptShape: PromptShape;
   thinking: ThinkingLevel;
+  mode: EconomyMode;
+  experimentCohort?: string;
+  shadowTiers?: Partial<Record<EconomyMode, Tier>>;
 }
 
 interface TokenomyStats {
@@ -294,6 +342,22 @@ interface RoutingHistoryEntry {
   toolCalls?: number;
   toolErrors?: number;
   retryRuns?: number;
+  language?: RoutingLanguage;
+  mode?: EconomyMode;
+  experimentCohort?: string;
+  shadowTiers?: Partial<Record<EconomyMode, Tier>>;
+  feedback?: FeedbackRating;
+  feedbackAt?: string;
+  correctionDetected?: boolean;
+  evaluatorScore?: number;
+  evaluatorReason?: string;
+  evaluatorStatus?: "measured" | "disabled" | "unavailable";
+  toolOutputChars?: number;
+  toolOutputTokens?: number;
+  toolOutputTokensSaved?: number;
+  duplicateToolCalls?: number;
+  oversizedToolResults?: number;
+  truncatedToolResults?: number;
 }
 
 interface RoutingHistory {
@@ -347,10 +411,31 @@ interface TelemetryRollupBucket {
   toolErrors: number;
   retryRuns: number;
   compactions: number;
+  verifiedSuccessTurns: number;
+  partialSuccessTurns: number;
+  verifiedFailureTurns: number;
+  correctionsDetected: number;
+  evaluatorMeasuredTurns: number;
+  evaluatorScoreTotal: number;
+  toolOutputChars: number;
+  toolOutputTokens: number;
+  toolOutputTokensSaved: number;
+  duplicateToolCalls: number;
+  oversizedToolResults: number;
+  truncatedToolResults: number;
+  compactionTokensBefore: number;
+  compactionTokensAfter: number;
+  compactionTokensSaved: number;
+  modes: Record<string, number>;
+  languages: Record<string, number>;
+  cohorts: Record<string, number>;
+  modeCompletedTurns: Record<string, number>;
+  modeVerifiedSuccessTurns: Record<string, number>;
+  modeCredits: Record<string, number>;
 }
 
 interface TelemetryRollups {
-  version: 2;
+  version: 3;
   updatedAt: string;
   lifetime: TelemetryRollupBucket;
   daily: Record<string, TelemetryRollupBucket>;
@@ -396,6 +481,21 @@ interface PendingTurnTelemetry {
   lastStopReason?: string;
   toolCalls: number;
   toolErrors: number;
+  rawPrompt: string;
+  outputText?: string;
+  mode: EconomyMode;
+  language: RoutingLanguage;
+  experimentCohort?: string;
+  toolOutputChars: number;
+  toolOutputTokens: number;
+  toolOutputTokensSaved: number;
+  duplicateToolCalls: number;
+  oversizedToolResults: number;
+  truncatedToolResults: number;
+  toolFingerprints: Set<string>;
+  evaluatorScore?: number;
+  evaluatorReason?: string;
+  evaluatorStatus?: "measured" | "disabled" | "unavailable";
 }
 
 interface AccountLimitSnapshot {
@@ -406,6 +506,38 @@ interface AccountLimitSnapshot {
   status: number;
   updatedAt: string;
   headers: Record<string, string>;
+}
+
+interface AccountQuotaWindow {
+  name: string;
+  used?: number;
+  limit?: number;
+  remaining?: number;
+  unit: "credits" | "percent" | "requests" | "tokens";
+  resetsAt?: string;
+}
+
+interface AccountQuotaSnapshot {
+  version: 1;
+  scope: "account";
+  source: "user" | "companion" | "enterprise-analytics";
+  authoritative: boolean;
+  updatedAt: string;
+  note?: string;
+  windows: AccountQuotaWindow[];
+}
+
+interface ExternalRateCard {
+  version: 1;
+  effectiveAt: string;
+  source: string;
+  rates: Record<string, CreditRates>;
+}
+
+interface PendingCompactionMeasurement {
+  startedAt: string;
+  tokensBefore: number;
+  reason: "manual" | "threshold" | "overflow";
 }
 
 type MemoryFactSource = "observed" | "config" | "package" | "workflow";
@@ -499,6 +631,38 @@ const DEFAULT_CONFIG: TokenomyConfig = {
     rateCardVersion: PLAN_CREDIT_RATE_CARD_VERSION,
     rates: PLAN_CREDIT_RATES,
   },
+  quality: {
+    correctionDetection: true,
+    evaluatorEnabled: false,
+    evaluatorModels: ["gpt-5.4-mini"],
+    evaluatorMaxPromptChars: 4000,
+    evaluatorMaxOutputChars: 6000,
+    minEvaluatorScore: 0.8,
+  },
+  experiments: {
+    enabled: false,
+    sampleRate: 1,
+    modes: ["save", "balanced", "quality"],
+  },
+  providers: {
+    allowed: ["openai-codex"],
+    autoDiscoverModels: false,
+  },
+  registry: {
+    rateCardPath: ".pi/tokenomy-rate-card.json",
+    rateCardUrl: "",
+    refreshHours: 24,
+    maxAgeDays: 30,
+  },
+  quota: {
+    accountSnapshotPath: ".pi/tokenomy-account-quota.json",
+    staleAfterMinutes: 60,
+  },
+  budgets: {
+    sessionCredits: 0,
+    dailyCredits: 0,
+    warnAtPercent: 80,
+  },
   cache: {
     enabled: true,
     classifierTtlMs: 7 * 24 * 60 * 60 * 1000,
@@ -553,6 +717,16 @@ const DEFAULT_CONFIG: TokenomyConfig = {
     preserveCustomTools: true,
     readOnlyTools: ["read", "grep", "find", "ls"],
     writeTools: ["read", "grep", "find", "ls", "edit", "write", "bash"],
+  },
+  toolEconomy: {
+    measureResults: true,
+    truncateOversized: false,
+    maxResultTokens: 6000,
+    preserveHeadChars: 12000,
+    preserveTailChars: 6000,
+  },
+  languages: {
+    enabled: ["en", "uk", "ru", "es", "fr", "de", "pt"],
   },
   debug: {
     dryRun: false,
@@ -789,6 +963,236 @@ function safeAmount(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value)
     ? Math.max(0, value)
     : 0;
+}
+
+function safeAmountMap(value: unknown): Record<string, number> {
+  const output: Record<string, number> = {};
+  if (!isObject(value)) return output;
+  for (const [key, amount] of Object.entries(value)) {
+    output[key] = safeAmount(amount);
+  }
+  return output;
+}
+
+function projectScopedPath(cwd: string, configuredPath: string): string | undefined {
+  if (!configuredPath.trim() || isAbsolute(configuredPath)) return undefined;
+  const path = resolve(cwd, configuredPath);
+  const fromProject = relative(resolve(cwd), path);
+  if (fromProject.startsWith("..") || isAbsolute(fromProject)) return undefined;
+  return path;
+}
+
+function isCreditRates(value: unknown): value is CreditRates {
+  return (
+    isObject(value) &&
+    typeof value.input === "number" &&
+    value.input >= 0 &&
+    typeof value.cacheRead === "number" &&
+    value.cacheRead >= 0 &&
+    typeof value.output === "number" &&
+    value.output >= 0 &&
+    (value.cacheWrite === undefined ||
+      (typeof value.cacheWrite === "number" && value.cacheWrite >= 0))
+  );
+}
+
+function loadExternalRateCard(
+  cwd: string,
+  config: TokenomyConfig,
+): { card?: ExternalRateCard; warning?: string } {
+  const path = projectScopedPath(cwd, config.registry.rateCardPath);
+  if (!path) {
+    return { warning: "registry.rateCardPath must be a project-relative path" };
+  }
+  if (!existsSync(path)) return {};
+  try {
+    const parsed = loadJson(path);
+    if (
+      !isObject(parsed) ||
+      parsed.version !== 1 ||
+      typeof parsed.effectiveAt !== "string" ||
+      !Number.isFinite(Date.parse(parsed.effectiveAt)) ||
+      typeof parsed.source !== "string" ||
+      !parsed.source.trim() ||
+      !isObject(parsed.rates)
+    ) {
+      return { warning: `invalid external rate card: ${path}` };
+    }
+    const rates = Object.fromEntries(
+      Object.entries(parsed.rates).filter(
+        (entry): entry is [string, CreditRates] => isCreditRates(entry[1]),
+      ),
+    );
+    if (!Object.keys(rates).length) {
+      return { warning: `external rate card has no valid rates: ${path}` };
+    }
+    const card: ExternalRateCard = {
+      version: 1,
+      effectiveAt: parsed.effectiveAt,
+      source: parsed.source,
+      rates,
+    };
+    const ageMs = Date.now() - Date.parse(card.effectiveAt);
+    const warning =
+      ageMs > config.registry.maxAgeDays * 24 * 60 * 60 * 1000
+        ? `external rate card is older than ${config.registry.maxAgeDays} days: ${path}`
+        : undefined;
+    return { card, warning };
+  } catch (error) {
+    return {
+      warning: `failed to load external rate card: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    };
+  }
+}
+
+function parseExternalRateCard(value: unknown): ExternalRateCard | undefined {
+  if (
+    !isObject(value) ||
+    value.version !== 1 ||
+    typeof value.effectiveAt !== "string" ||
+    !Number.isFinite(Date.parse(value.effectiveAt)) ||
+    typeof value.source !== "string" ||
+    !value.source.trim() ||
+    !isObject(value.rates)
+  ) {
+    return undefined;
+  }
+  const rates = Object.fromEntries(
+    Object.entries(value.rates).filter(
+      (entry): entry is [string, CreditRates] => isCreditRates(entry[1]),
+    ),
+  );
+  if (!Object.keys(rates).length) return undefined;
+  return {
+    version: 1,
+    effectiveAt: value.effectiveAt,
+    source: value.source,
+    rates,
+  };
+}
+
+async function refreshExternalRateCard(
+  cwd: string,
+  config: TokenomyConfig,
+): Promise<{ refreshed: boolean; warning?: string }> {
+  if (!config.registry.rateCardUrl) return { refreshed: false };
+  let url: URL;
+  try {
+    url = new URL(config.registry.rateCardUrl);
+  } catch {
+    return { refreshed: false, warning: "registry.rateCardUrl is invalid" };
+  }
+  if (url.protocol !== "https:") {
+    return {
+      refreshed: false,
+      warning: "registry.rateCardUrl must use HTTPS",
+    };
+  }
+  const path = projectScopedPath(cwd, config.registry.rateCardPath);
+  if (!path) {
+    return {
+      refreshed: false,
+      warning: "registry.rateCardPath must be a project-relative path",
+    };
+  }
+  const existing = loadExternalRateCard(cwd, config).card;
+  if (
+    existing &&
+    Date.now() - Date.parse(existing.effectiveAt) <
+      config.registry.refreshHours * 60 * 60 * 1000
+  ) {
+    return { refreshed: false };
+  }
+  try {
+    const response = await fetch(url, {
+      headers: { accept: "application/json" },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) {
+      return {
+        refreshed: false,
+        warning: `rate-card refresh returned HTTP ${response.status}`,
+      };
+    }
+    const text = await response.text();
+    if (text.length > 256_000) {
+      return { refreshed: false, warning: "rate-card response is too large" };
+    }
+    const card = parseExternalRateCard(JSON.parse(text));
+    if (!card) {
+      return { refreshed: false, warning: "remote rate card is invalid" };
+    }
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, `${JSON.stringify(card, null, 2)}\n`, "utf8");
+    return { refreshed: true };
+  } catch (error) {
+    return {
+      refreshed: false,
+      warning: `rate-card refresh failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    };
+  }
+}
+
+function loadAccountQuotaSnapshot(
+  cwd: string,
+  config: TokenomyConfig,
+): { snapshot?: AccountQuotaSnapshot; path?: string; warning?: string } {
+  const path = projectScopedPath(cwd, config.quota.accountSnapshotPath);
+  if (!path) {
+    return { warning: "quota.accountSnapshotPath must be a project-relative path" };
+  }
+  if (!existsSync(path)) return { path };
+  try {
+    const parsed = loadJson(path);
+    if (
+      !isObject(parsed) ||
+      parsed.version !== 1 ||
+      parsed.scope !== "account" ||
+      !["user", "companion", "enterprise-analytics"].includes(
+        String(parsed.source),
+      ) ||
+      typeof parsed.authoritative !== "boolean" ||
+      typeof parsed.updatedAt !== "string" ||
+      !Number.isFinite(Date.parse(parsed.updatedAt)) ||
+      !Array.isArray(parsed.windows)
+    ) {
+      return { path, warning: `invalid account quota snapshot: ${path}` };
+    }
+    const windows = parsed.windows.filter(
+      (window): window is AccountQuotaWindow =>
+        isObject(window) &&
+        typeof window.name === "string" &&
+        ["credits", "percent", "requests", "tokens"].includes(
+          String(window.unit),
+        ) &&
+        [window.used, window.limit, window.remaining].every(
+          (value) =>
+            value === undefined ||
+            (typeof value === "number" && Number.isFinite(value) && value >= 0),
+        ),
+    );
+    const snapshot = {
+      ...(parsed as unknown as AccountQuotaSnapshot),
+      windows,
+    };
+    const ageMs = Date.now() - Date.parse(snapshot.updatedAt);
+    const warning =
+      ageMs > config.quota.staleAfterMinutes * 60 * 1000
+        ? `account quota snapshot is older than ${config.quota.staleAfterMinutes} minutes`
+        : undefined;
+    return { snapshot, path, warning };
+  } catch (error) {
+    return {
+      path,
+      warning: `failed to load account quota snapshot: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    };
+  }
 }
 
 function emptyUsageTotals(): UsageTotals {
@@ -1068,12 +1472,33 @@ function emptyRollupBucket(): TelemetryRollupBucket {
     toolErrors: 0,
     retryRuns: 0,
     compactions: 0,
+    verifiedSuccessTurns: 0,
+    partialSuccessTurns: 0,
+    verifiedFailureTurns: 0,
+    correctionsDetected: 0,
+    evaluatorMeasuredTurns: 0,
+    evaluatorScoreTotal: 0,
+    toolOutputChars: 0,
+    toolOutputTokens: 0,
+    toolOutputTokensSaved: 0,
+    duplicateToolCalls: 0,
+    oversizedToolResults: 0,
+    truncatedToolResults: 0,
+    compactionTokensBefore: 0,
+    compactionTokensAfter: 0,
+    compactionTokensSaved: 0,
+    modes: {},
+    languages: {},
+    cohorts: {},
+    modeCompletedTurns: {},
+    modeVerifiedSuccessTurns: {},
+    modeCredits: {},
   };
 }
 
 function emptyRollups(): TelemetryRollups {
   return {
-    version: 2,
+    version: 3,
     updatedAt: "",
     lifetime: emptyRollupBucket(),
     daily: {},
@@ -1141,6 +1566,27 @@ function loadRollupBucket(value: unknown): TelemetryRollupBucket {
     toolErrors: safeInt(value.toolErrors),
     retryRuns: safeInt(value.retryRuns),
     compactions: safeInt(value.compactions),
+    verifiedSuccessTurns: safeInt(value.verifiedSuccessTurns),
+    partialSuccessTurns: safeInt(value.partialSuccessTurns),
+    verifiedFailureTurns: safeInt(value.verifiedFailureTurns),
+    correctionsDetected: safeInt(value.correctionsDetected),
+    evaluatorMeasuredTurns: safeInt(value.evaluatorMeasuredTurns),
+    evaluatorScoreTotal: safeAmount(value.evaluatorScoreTotal),
+    toolOutputChars: safeInt(value.toolOutputChars),
+    toolOutputTokens: safeInt(value.toolOutputTokens),
+    toolOutputTokensSaved: safeInt(value.toolOutputTokensSaved),
+    duplicateToolCalls: safeInt(value.duplicateToolCalls),
+    oversizedToolResults: safeInt(value.oversizedToolResults),
+    truncatedToolResults: safeInt(value.truncatedToolResults),
+    compactionTokensBefore: safeInt(value.compactionTokensBefore),
+    compactionTokensAfter: safeInt(value.compactionTokensAfter),
+    compactionTokensSaved: safeInt(value.compactionTokensSaved),
+    modes: safeNumberMap(value.modes),
+    languages: safeNumberMap(value.languages),
+    cohorts: safeNumberMap(value.cohorts),
+    modeCompletedTurns: safeNumberMap(value.modeCompletedTurns),
+    modeVerifiedSuccessTurns: safeNumberMap(value.modeVerifiedSuccessTurns),
+    modeCredits: safeAmountMap(value.modeCredits),
   };
 }
 
@@ -1157,7 +1603,7 @@ function loadTelemetryRollups(cwd: string): TelemetryRollups {
   const parsed = loadJson(telemetryRollupsPath(cwd));
   if (!isObject(parsed)) return emptyRollups();
   return {
-    version: 2,
+    version: 3,
     updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : "",
     lifetime: loadRollupBucket(parsed.lifetime),
     daily: loadRollupBuckets(parsed.daily),
@@ -1191,7 +1637,7 @@ function saveTelemetryRollups(
     Object.entries(rollups.monthly).sort(([a], [b]) => b.localeCompare(a)),
   );
   const next: TelemetryRollups = {
-    version: 2,
+    version: 3,
     updatedAt: now.toISOString(),
     lifetime: rollups.lifetime,
     daily,
@@ -1697,6 +2143,29 @@ function validateConfig(config: TokenomyConfig): string[] {
     warnings.push("tools.writeTools is empty");
   }
   if (
+    typeof config.toolEconomy.maxResultTokens !== "number" ||
+    config.toolEconomy.maxResultTokens < 100
+  ) {
+    warnings.push("toolEconomy.maxResultTokens must be at least 100");
+  }
+  if (
+    config.toolEconomy.preserveHeadChars < 0 ||
+    config.toolEconomy.preserveTailChars < 0
+  ) {
+    warnings.push("toolEconomy preserve character counts must be non-negative");
+  }
+  if (
+    !Array.isArray(config.languages.enabled) ||
+    config.languages.enabled.some(
+      (language) =>
+        !["en", "uk", "ru", "es", "fr", "de", "pt", "unknown"].includes(
+          language,
+        ),
+    )
+  ) {
+    warnings.push("languages.enabled contains an unsupported language");
+  }
+  if (
     typeof config.classifier.minConfidence !== "number" ||
     config.classifier.minConfidence < 0 ||
     config.classifier.minConfidence > 1
@@ -1725,17 +2194,72 @@ function validateConfig(config: TokenomyConfig): string[] {
     warnings.push("planCredits.rateCardVersion must be a non-empty string");
   }
   for (const [model, rates] of Object.entries(config.planCredits.rates)) {
-    if (
-      !isObject(rates) ||
-      typeof rates.input !== "number" ||
-      typeof rates.cacheRead !== "number" ||
-      typeof rates.output !== "number" ||
-      rates.input < 0 ||
-      rates.cacheRead < 0 ||
-      rates.output < 0
-    ) {
+    if (!isCreditRates(rates)) {
       warnings.push(`planCredits.rates.${model} is invalid`);
     }
+  }
+  if (
+    typeof config.quality.minEvaluatorScore !== "number" ||
+    config.quality.minEvaluatorScore < 0 ||
+    config.quality.minEvaluatorScore > 1
+  ) {
+    warnings.push("quality.minEvaluatorScore must be a number from 0 to 1");
+  }
+  if (!Array.isArray(config.quality.evaluatorModels)) {
+    warnings.push("quality.evaluatorModels must be an array");
+  }
+  if (
+    typeof config.experiments.sampleRate !== "number" ||
+    config.experiments.sampleRate < 0 ||
+    config.experiments.sampleRate > 1
+  ) {
+    warnings.push("experiments.sampleRate must be a number from 0 to 1");
+  }
+  if (
+    !Array.isArray(config.experiments.modes) ||
+    config.experiments.modes.some(
+      (mode) => mode !== "save" && mode !== "balanced" && mode !== "quality",
+    )
+  ) {
+    warnings.push("experiments.modes contains an invalid economy mode");
+  }
+  if (!Array.isArray(config.providers.allowed) || !config.providers.allowed.length) {
+    warnings.push("providers.allowed must contain at least one provider");
+  }
+  if (
+    typeof config.registry.maxAgeDays !== "number" ||
+    config.registry.maxAgeDays < 1
+  ) {
+    warnings.push("registry.maxAgeDays must be at least 1");
+  }
+  if (
+    typeof config.registry.refreshHours !== "number" ||
+    config.registry.refreshHours < 1
+  ) {
+    warnings.push("registry.refreshHours must be at least 1");
+  }
+  if (
+    typeof config.registry.rateCardUrl !== "string" ||
+    (config.registry.rateCardUrl &&
+      !config.registry.rateCardUrl.startsWith("https://"))
+  ) {
+    warnings.push("registry.rateCardUrl must be empty or use HTTPS");
+  }
+  if (
+    typeof config.quota.staleAfterMinutes !== "number" ||
+    config.quota.staleAfterMinutes < 1
+  ) {
+    warnings.push("quota.staleAfterMinutes must be at least 1");
+  }
+  if (
+    typeof config.budgets.warnAtPercent !== "number" ||
+    config.budgets.warnAtPercent <= 0 ||
+    config.budgets.warnAtPercent > 100
+  ) {
+    warnings.push("budgets.warnAtPercent must be greater than 0 and at most 100");
+  }
+  if (config.budgets.sessionCredits < 0 || config.budgets.dailyCredits < 0) {
+    warnings.push("budgets sessionCredits and dailyCredits must be non-negative");
   }
   if (
     typeof config.cache.classifierTtlMs !== "number" ||
@@ -1891,6 +2415,18 @@ function loadConfig(cwd: string): { config: TokenomyConfig; warnings: string[] }
     }
   }
 
+  const external = loadExternalRateCard(cwd, config);
+  if (external.card) {
+    config = {
+      ...config,
+      planCredits: {
+        ...config.planCredits,
+        rateCardVersion: `external:${external.card.effectiveAt}`,
+        rates: { ...config.planCredits.rates, ...external.card.rates },
+      },
+    };
+  }
+  if (external.warning) warnings.push(external.warning);
   warnings.push(...validateConfig(config));
   return { config, warnings };
 }
@@ -1904,30 +2440,116 @@ function hasAny(lower: string, patterns: RegExp[]): boolean {
   return patterns.some((pattern) => pattern.test(lower));
 }
 
-function shouldBypassForLanguage(prompt: string): boolean {
+function detectRoutingLanguage(prompt: string): RoutingLanguage {
   const lower = prompt.toLowerCase();
+  if (/[іїєґ]/u.test(lower)) return "uk";
+  if (/[ыэъё]/u.test(lower)) return "ru";
+  if (/[\u0400-\u04ff]/u.test(lower)) {
+    return hasAny(lower, [/(будь ласка|виправ|зроби|додай|проаналізуй)/u])
+      ? "uk"
+      : "ru";
+  }
+  if (hasAny(lower, [/(por favor|arregla|implementa|pruebas?|lanzamiento|añade)/u]))
+    return "es";
+  if (hasAny(lower, [/(s'il vous plaît|corrigez|implémente|vérifie|répare)/u]))
+    return "fr";
+  if (hasAny(lower, [/(bitte|behebe|implementiere|veröffentliche|prüfe)/u]))
+    return "de";
+  if (hasAny(lower, [/(corrija|implemente|testes?|lançamento|você)/u]))
+    return "pt";
+
   const englishInstructionSignals = [
     /\b(please|help|can you|could you|would you|do|run|perform|review|audit|scan|inspect|refactor|fix|debug|explain|summari[sz]e|translate|keep|preserve|change|update|implement|read|check)\b/,
     /\b(this|the)\s+(text|comment|string|message|file|prompt|translation|output|error|log|code)\b/,
   ];
-  if (hasAny(lower, englishInstructionSignals)) return false;
+  if (hasAny(lower, englishInstructionSignals)) return "en";
 
   const letters = Array.from(prompt.matchAll(/\p{L}/gu), (match) => match[0]);
-  if (letters.length < 4) return false;
+  if (letters.length < 4) return "en";
 
   const latinLetters = letters.filter((char) => /\p{Script=Latin}/u.test(char))
     .length;
   const nonLatinLetters = letters.length - latinLetters;
-  if (nonLatinLetters === 0) return false;
+  if (nonLatinLetters === 0) return "en";
 
   const codeOrPathSignals = [
     /[`{}[\]();=<>]/,
     /(^|\s)(\.?\/|~\/|src\/|lib\/|app\/|test\/|tests\/|\.pi\/|\.github\/)[\w./-]+/,
     /\b[\w.-]+\.(ts|tsx|js|jsx|mjs|cjs|json|md|py|rs|go|rb|java|kt|yml|yaml|toml|lock|lua|vim)\b/i,
   ];
-  if (hasAny(prompt, codeOrPathSignals)) return false;
+  if (hasAny(prompt, codeOrPathSignals)) return "en";
 
-  return nonLatinLetters / letters.length >= 0.2;
+  return nonLatinLetters / letters.length >= 0.2 ? "unknown" : "en";
+}
+
+function shouldBypassForLanguage(
+  prompt: string,
+  config: TokenomyConfig,
+): boolean {
+  const language = detectRoutingLanguage(prompt);
+  return language === "unknown" || !config.languages.enabled.includes(language);
+}
+
+function routingSignalText(
+  prompt: string,
+  language: RoutingLanguage,
+): string {
+  const lower = prompt.toLowerCase();
+  const mappings: Partial<Record<RoutingLanguage, Array<[RegExp, string]>>> = {
+    uk: [
+      [/(виправ|полагодь|помилк\w*)/gu, " fix bug error "],
+      [/(реалізуй|впровадь|додай|зміни|онови)/gu, " implement add change update "],
+      [/(тест\w*|перевір)/gu, " test verify "],
+      [/(аудит|огляд|проаналізуй)/gu, " audit review analyze "],
+      [/(реліз|опублікуй|тег)/gu, " release publish tag "],
+      [/(архітектур\w*|безпек\w*)/gu, " architecture security "],
+    ],
+    ru: [
+      [/(исправь|почини|ошибк\w*)/gu, " fix bug error "],
+      [/(реализуй|добавь|измени|обнови)/gu, " implement add change update "],
+      [/(тест\w*|проверь)/gu, " test verify "],
+      [/(аудит|обзор|проанализируй)/gu, " audit review analyze "],
+      [/(релиз|опубликуй|тег)/gu, " release publish tag "],
+      [/(архитектур\w*|безопасност\w*)/gu, " architecture security "],
+    ],
+    es: [
+      [/\b(arregla|corrige|error)\b/gu, " fix bug error "],
+      [/\b(implementa|añade|cambia|actualiza)\b/gu, " implement add change update "],
+      [/\b(pruebas?|verifica)\b/gu, " test verify "],
+      [/\b(audita|revisa|analiza)\b/gu, " audit review analyze "],
+      [/\b(lanzamiento|publica|etiqueta)\b/gu, " release publish tag "],
+      [/\b(arquitectura|seguridad)\b/gu, " architecture security "],
+    ],
+    fr: [
+      [/\b(corrige|répare|erreur)\b/gu, " fix bug error "],
+      [/\b(implémente|ajoute|modifie|mets à jour)\b/gu, " implement add change update "],
+      [/\b(tests?|vérifie)\b/gu, " test verify "],
+      [/\b(audite|révise|analyse)\b/gu, " audit review analyze "],
+      [/\b(version|publie|étiquette)\b/gu, " release publish tag "],
+      [/\b(architecture|sécurité)\b/gu, " architecture security "],
+    ],
+    de: [
+      [/\b(behebe|repariere|fehler)\b/gu, " fix bug error "],
+      [/\b(implementiere|füge hinzu|ändere|aktualisiere)\b/gu, " implement add change update "],
+      [/\b(tests?|prüfe)\b/gu, " test verify "],
+      [/\b(auditiere|überprüfe|analysiere)\b/gu, " audit review analyze "],
+      [/\b(veröffentliche|release|tag)\b/gu, " release publish tag "],
+      [/\b(architektur|sicherheit)\b/gu, " architecture security "],
+    ],
+    pt: [
+      [/\b(corrija|conserte|erro)\b/gu, " fix bug error "],
+      [/\b(implemente|adicione|altere|atualize)\b/gu, " implement add change update "],
+      [/\b(testes?|verifique)\b/gu, " test verify "],
+      [/\b(audite|revise|analise)\b/gu, " audit review analyze "],
+      [/\b(lançamento|publique|etiqueta)\b/gu, " release publish tag "],
+      [/\b(arquitetura|segurança)\b/gu, " architecture security "],
+    ],
+  };
+  const translated = (mappings[language] ?? [])
+    .filter(([pattern]) => pattern.test(lower))
+    .map(([, signal]) => signal)
+    .join("");
+  return `${lower}${translated}`;
 }
 
 function isSignalLine(line: string): boolean {
@@ -2340,8 +2962,11 @@ function analyzePrompt(
   imageCount: number,
   config: TokenomyConfig,
 ): LocalAnalysis {
-  const lower = prompt.toLowerCase();
-  const promptShape = analyzePromptShape(prompt);
+  const language = detectRoutingLanguage(prompt);
+  const lower = routingSignalText(prompt, language);
+  const promptShape = analyzePromptShape(
+    language === "en" ? prompt : routingSignalText(prompt, language),
+  );
   const signals: string[] = [];
   let score = 0;
 
@@ -2491,6 +3116,7 @@ function analyzePrompt(
     score,
     signals,
     estimatedClassifierTokens,
+    language,
   };
 }
 
@@ -2545,9 +3171,11 @@ function findFirstModel(
   ctx: ExtensionContext,
   specs: ModelSpec[],
   defaultProvider: string,
+  allowedProviders?: string[],
 ): Model<Api> | undefined {
   for (const spec of specs) {
     const { provider, id } = parseModelSpec(spec, defaultProvider);
+    if (allowedProviders && !allowedProviders.includes(provider)) continue;
     const model = ctx.modelRegistry.find(provider, id);
     if (model) return model;
   }
@@ -2576,7 +3204,12 @@ function findBestConfiguredFallbackModel(
   ];
   const candidates = allSpecs
     .map((spec, index) => {
-      const model = findFirstModel(ctx, [spec], config.provider);
+      const model = findFirstModel(
+        ctx,
+        [spec],
+        config.provider,
+        config.providers.allowed,
+      );
       return model ? { model, index } : undefined;
     })
     .filter((item): item is { model: Model<Api>; index: number } => !!item)
@@ -2587,14 +3220,52 @@ function findBestConfiguredFallbackModel(
   return candidates[0]?.model;
 }
 
+function modelRateScore(model: Model<Api>): number {
+  const cost = model.cost;
+  if (!cost) return modelFamilyRank(model.id) * 100;
+  return (
+    safeAmount(cost.input) +
+    safeAmount(cost.cacheRead) +
+    safeAmount(cost.output) * 0.4 +
+    safeAmount(cost.cacheWrite)
+  );
+}
+
+function findAutoDiscoveredModel(
+  ctx: ExtensionContext,
+  config: TokenomyConfig,
+  tier: Tier,
+): Model<Api> | undefined {
+  if (!config.providers.autoDiscoverModels) return undefined;
+  const available = ctx.modelRegistry
+    .getAvailable()
+    .filter((model) => config.providers.allowed.includes(model.provider))
+    .sort((a, b) => modelRateScore(a) - modelRateScore(b));
+  if (!available.length) return undefined;
+  if (tier === "simple") return available[0];
+  if (tier === "complex") return available.at(-1);
+  return available[Math.floor((available.length - 1) / 2)];
+}
+
 function findStartupModel(
   ctx: ExtensionContext,
   config: TokenomyConfig,
 ): Model<Api> | undefined {
   return (
-    findFirstModel(ctx, config.models.complex, config.provider) ??
-    findFirstModel(ctx, config.models.medium, config.provider) ??
-    findBestConfiguredFallbackModel(ctx, config)
+    findFirstModel(
+      ctx,
+      config.models.complex,
+      config.provider,
+      config.providers.allowed,
+    ) ??
+    findFirstModel(
+      ctx,
+      config.models.medium,
+      config.provider,
+      config.providers.allowed,
+    ) ??
+    findBestConfiguredFallbackModel(ctx, config) ??
+    findAutoDiscoveredModel(ctx, config, "complex")
   );
 }
 
@@ -2632,6 +3303,47 @@ function extractEventText(event: unknown): string | undefined {
     }
   }
   return undefined;
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (!isObject(value)) return JSON.stringify(value) ?? String(value);
+  return `{${Object.entries(value)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`)
+    .join(",")}}`;
+}
+
+function toolResultText(content: unknown): string {
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter(
+      (part): part is { type: "text"; text: string } =>
+        isObject(part) && part.type === "text" && typeof part.text === "string",
+    )
+    .map((part) => part.text)
+    .join("\n");
+}
+
+function truncateToolResultContent(
+  content: Array<{ type: string; text?: string }>,
+  config: TokenomyConfig,
+): Array<{ type: string; text?: string }> {
+  const marker = "\n\n[Tokenomy: oversized tool result truncated; head and tail preserved]\n\n";
+  let remainingHead = config.toolEconomy.preserveHeadChars;
+  let remainingTail = config.toolEconomy.preserveTailChars;
+  return content.map((part) => {
+    if (part.type !== "text" || typeof part.text !== "string") return part;
+    if (countTokens(part.text) <= config.toolEconomy.maxResultTokens) return part;
+    const head = part.text.slice(0, remainingHead);
+    const tail =
+      remainingTail > 0
+        ? part.text.slice(Math.max(head.length, part.text.length - remainingTail))
+        : "";
+    remainingHead = Math.max(0, remainingHead - head.length);
+    remainingTail = Math.max(0, remainingTail - tail.length);
+    return { ...part, text: `${head}${marker}${tail}` };
+  });
 }
 
 function buildClassifierPrompt(
@@ -2734,6 +3446,7 @@ async function classifyWithCheapModel(
     ctx,
     config.models.classifier,
     config.provider,
+    config.providers.allowed,
   );
   if (!classifier) return undefined;
 
@@ -2802,15 +3515,16 @@ function fallbackTierFor(
   analysis: LocalAnalysis,
   config: TokenomyConfig,
   stats: TokenomyStats,
+  mode: EconomyMode = config.mode,
 ): Tier {
   if (!config.adaptive.enabled) return "simple";
-  if (config.mode === "save" && analysis.risk === "low") return "simple";
+  if (mode === "save" && analysis.risk === "low") return "simple";
   // Low-risk uncertainty stays cheap; risky uncertainty moves up because a bad
   // cheap attempt can cost more total tokens through retries and corrections.
   if (config.adaptive.complexFallbackIntents.includes(analysis.intent)) {
     return "complex";
   }
-  if (config.mode === "quality") {
+  if (mode === "quality") {
     return analysis.risk === "high" ? "complex" : "medium";
   }
   if (riskAtLeast(analysis.risk, config.adaptive.mediumFallbackMinRisk)) {
@@ -2823,15 +3537,56 @@ function fallbackTierFor(
   return "simple";
 }
 
+function experimentForPrompt(
+  prompt: string,
+  config: TokenomyConfig,
+): { mode: EconomyMode; cohort?: string } {
+  if (!config.experiments.enabled || !config.experiments.modes.length) {
+    return { mode: config.mode };
+  }
+  const digest = createHash("sha256").update(normalizedPrompt(prompt)).digest();
+  const sample = digest.readUInt32BE(0) / 0xffffffff;
+  if (sample > config.experiments.sampleRate) return { mode: config.mode };
+  const mode =
+    config.experiments.modes[
+      digest.readUInt32BE(4) % config.experiments.modes.length
+    ];
+  return { mode, cohort: `mode:${mode}` };
+}
+
+function shadowTiersFor(
+  analysis: LocalAnalysis,
+  config: TokenomyConfig,
+  stats: TokenomyStats,
+): Partial<Record<EconomyMode, Tier>> {
+  return Object.fromEntries(
+    (["save", "balanced", "quality"] as EconomyMode[]).map((mode) => [
+      mode,
+      fallbackTierFor(analysis, config, stats, mode),
+    ]),
+  );
+}
+
 function findFallbackModelForTier(
   ctx: ExtensionContext,
   config: TokenomyConfig,
   tier: Tier,
 ): Model<Api> | undefined {
-  if (tier === "simple") return findBestConfiguredFallbackModel(ctx, config);
+  if (tier === "simple") {
+    return (
+      findBestConfiguredFallbackModel(ctx, config) ??
+      findAutoDiscoveredModel(ctx, config, tier)
+    );
+  }
   return (
-    findFirstModel(ctx, config.models[tier], config.provider) ??
-    findBestConfiguredFallbackModel(ctx, config)
+    findFirstModel(
+      ctx,
+      config.models[tier],
+      config.provider,
+      config.providers.allowed,
+    ) ??
+    findBestConfiguredFallbackModel(ctx, config) ??
+    findAutoDiscoveredModel(ctx, config, tier)
   );
 }
 
@@ -2907,6 +3662,10 @@ function recordRoutingHistory(
     memoryEstimatedTokensSaved: memoryInjection?.estimatedTokensSaved,
     baselineModel,
     usageStatus: "pending",
+    language: analysis.language,
+    mode: decision.mode,
+    experimentCohort: decision.experimentCohort,
+    shadowTiers: decision.shadowTiers,
   };
   saveRoutingHistory(cwd, { entries: [entry, ...history.entries] }, config);
   return id;
@@ -2960,6 +3719,11 @@ function addRollupSample(
   incrementCounter(bucket.promptShapes, analysis.promptShape.kind);
   incrementCounter(bucket.actionCounts, String(analysis.promptShape.actionCount));
   incrementCounter(bucket.models, decision.model);
+  incrementCounter(bucket.modes, decision.mode);
+  incrementCounter(bucket.languages, analysis.language);
+  if (decision.experimentCohort) {
+    incrementCounter(bucket.cohorts, decision.experimentCohort);
+  }
 }
 
 function recordTelemetryRollup(
@@ -3037,7 +3801,11 @@ function updateMeasuredTelemetry(
   pending: PendingTurnTelemetry,
   event: unknown,
   config: TokenomyConfig,
-): { usage?: UsageTotals; outputText?: string } {
+): {
+  usage?: UsageTotals;
+  outputText?: string;
+  estimatedPlanCredits?: number;
+} {
   const measured = measuredAgentUsage(event, config);
   const firstAgentEnd = pending.agentEndCount === 0;
   const firstMeasuredUsage = !!measured.usage && !pending.usageRecorded;
@@ -3084,6 +3852,13 @@ function updateMeasuredTelemetry(
         classifierEstimatedPlanCredits,
         firstMeasuredUsage,
       );
+      const turnCredits =
+        (measured.estimatedPlanCredits ?? 0) +
+        (classifierEstimatedPlanCredits ?? 0);
+      if (turnCredits > 0) {
+        bucket.modeCredits[pending.mode] =
+          (bucket.modeCredits[pending.mode] ?? 0) + turnCredits;
+      }
     }
     saveTelemetryRollups(cwd, rollups, config);
   }
@@ -3092,7 +3867,13 @@ function updateMeasuredTelemetry(
   if (measured.usage) pending.usageRecorded = true;
   pending.lastStopReason =
     lastAssistantStopReason(event) ?? pending.lastStopReason;
-  return { usage: measured.usage, outputText: measured.outputText };
+  return {
+    usage: measured.usage,
+    outputText: measured.outputText,
+    estimatedPlanCredits:
+      (measured.estimatedPlanCredits ?? 0) +
+      (classifierEstimatedPlanCredits ?? 0),
+  };
 }
 
 function markTurnUsageUnavailable(
@@ -3165,6 +3946,15 @@ function finalizeTurnOutcome(
     entry.toolCalls = pending.toolCalls;
     entry.toolErrors = pending.toolErrors;
     entry.retryRuns = retryRuns;
+    entry.toolOutputChars = pending.toolOutputChars;
+    entry.toolOutputTokens = pending.toolOutputTokens;
+    entry.toolOutputTokensSaved = pending.toolOutputTokensSaved;
+    entry.duplicateToolCalls = pending.duplicateToolCalls;
+    entry.oversizedToolResults = pending.oversizedToolResults;
+    entry.truncatedToolResults = pending.truncatedToolResults;
+    entry.evaluatorScore = pending.evaluatorScore;
+    entry.evaluatorReason = pending.evaluatorReason;
+    entry.evaluatorStatus = pending.evaluatorStatus;
     saveRoutingHistory(cwd, history, config);
   }
 
@@ -3185,11 +3975,216 @@ function finalizeTurnOutcome(
     bucket.toolCalls += pending.toolCalls;
     bucket.toolErrors += pending.toolErrors;
     bucket.retryRuns += retryRuns;
+    bucket.toolOutputChars += pending.toolOutputChars;
+    bucket.toolOutputTokens += pending.toolOutputTokens;
+    bucket.toolOutputTokensSaved += pending.toolOutputTokensSaved;
+    bucket.duplicateToolCalls += pending.duplicateToolCalls;
+    bucket.oversizedToolResults += pending.oversizedToolResults;
+    bucket.truncatedToolResults += pending.truncatedToolResults;
+    if (outcome === "completed") {
+      incrementCounter(bucket.modeCompletedTurns, pending.mode);
+    }
+    if (pending.evaluatorScore !== undefined) {
+      bucket.evaluatorMeasuredTurns += 1;
+      bucket.evaluatorScoreTotal += pending.evaluatorScore;
+    }
   }
   saveTelemetryRollups(cwd, rollups, config);
 }
 
-function recordCompaction(cwd: string, config: TokenomyConfig): void {
+function correctionSignal(prompt: string): boolean {
+  const lower = prompt.toLowerCase();
+  return hasAny(lower, [
+    /\b(no|wait|actually),?\s+(that'?s|this is|it'?s)\s+(wrong|incorrect|not right)\b/,
+    /\b(not what i asked|you misunderstood|fix your previous|redo that|try again)\b/,
+    /\b(ні|нет),?\s+(це|это)\s+(неправильно|неверно|не те|не то)\b/u,
+    /\b(ти|ты)\s+(неправильно|неверно)\s+(зрозумів|понял)\b/u,
+    /\b(no es correcto|me entendiste mal|corrige lo anterior)\b/u,
+    /\b(c'est incorrect|tu as mal compris|corrige la réponse)\b/u,
+    /\b(das ist falsch|du hast mich falsch verstanden)\b/u,
+    /\b(está errado|você entendeu errado|corrija a resposta)\b/u,
+  ]);
+}
+
+function updateBucketsForEntry(
+  rollups: TelemetryRollups,
+  entry: RoutingHistoryEntry,
+  update: (bucket: TelemetryRollupBucket) => void,
+): void {
+  const day = entry.at.slice(0, 10);
+  const month = entry.at.slice(0, 7);
+  rollups.daily[day] ??= emptyRollupBucket();
+  rollups.monthly[month] ??= emptyRollupBucket();
+  for (const bucket of [
+    rollups.lifetime,
+    rollups.daily[day],
+    rollups.monthly[month],
+  ]) {
+    update(bucket);
+  }
+}
+
+function markLatestCorrection(cwd: string, config: TokenomyConfig): boolean {
+  if (!config.telemetry.enabled || !config.quality.correctionDetection) return false;
+  const history = loadRoutingHistory(cwd);
+  const entry = history.entries.find(
+    (item) => item.outcome !== undefined && !item.correctionDetected,
+  );
+  if (!entry) return false;
+  entry.correctionDetected = true;
+  saveRoutingHistory(cwd, history, config);
+  const rollups = loadTelemetryRollups(cwd);
+  updateBucketsForEntry(rollups, entry, (bucket) => {
+    bucket.correctionsDetected += 1;
+  });
+  saveTelemetryRollups(cwd, rollups, config);
+  return true;
+}
+
+function feedbackCounter(
+  bucket: TelemetryRollupBucket,
+  rating: FeedbackRating,
+): keyof TelemetryRollupBucket {
+  if (rating === "success") return "verifiedSuccessTurns";
+  if (rating === "partial") return "partialSuccessTurns";
+  return "verifiedFailureTurns";
+}
+
+function recordLatestFeedback(
+  cwd: string,
+  rating: FeedbackRating,
+  config: TokenomyConfig,
+): RoutingHistoryEntry | undefined {
+  const history = loadRoutingHistory(cwd);
+  const entry = history.entries.find((item) => item.outcome !== undefined);
+  if (!entry) return undefined;
+  const previous = entry.feedback;
+  entry.feedback = rating;
+  entry.feedbackAt = new Date().toISOString();
+  saveRoutingHistory(cwd, history, config);
+  const rollups = loadTelemetryRollups(cwd);
+  updateBucketsForEntry(rollups, entry, (bucket) => {
+    if (previous) {
+      const previousKey = feedbackCounter(bucket, previous);
+      (bucket[previousKey] as number) = Math.max(
+        0,
+        (bucket[previousKey] as number) - 1,
+      );
+      if (previous === "success" && entry.mode) {
+        bucket.modeVerifiedSuccessTurns[entry.mode] = Math.max(
+          0,
+          (bucket.modeVerifiedSuccessTurns[entry.mode] ?? 0) - 1,
+        );
+      }
+    }
+    const key = feedbackCounter(bucket, rating);
+    (bucket[key] as number) += 1;
+    if (rating === "success" && entry.mode) {
+      incrementCounter(bucket.modeVerifiedSuccessTurns, entry.mode);
+    }
+  });
+  saveTelemetryRollups(cwd, rollups, config);
+  return entry;
+}
+
+function parseEvaluatorResponse(
+  text: string,
+): { score: number; reason: string } | undefined {
+  try {
+    const parsed = JSON.parse(text.match(/\{[\s\S]*\}/)?.[0] ?? text);
+    if (!isObject(parsed) || typeof parsed.score !== "number") return undefined;
+    return {
+      score: Math.max(0, Math.min(1, parsed.score)),
+      reason:
+        typeof parsed.reason === "string"
+          ? parsed.reason.slice(0, 160)
+          : "independent evaluator",
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+async function evaluateTurnQuality(
+  pending: PendingTurnTelemetry,
+  config: TokenomyConfig,
+  ctx: ExtensionContext,
+): Promise<void> {
+  if (!config.quality.evaluatorEnabled) {
+    pending.evaluatorStatus = "disabled";
+    return;
+  }
+  if (!pending.outputText) {
+    pending.evaluatorStatus = "unavailable";
+    return;
+  }
+  const evaluator = findFirstModel(
+    ctx,
+    config.quality.evaluatorModels,
+    config.provider,
+    config.providers.allowed,
+  );
+  if (!evaluator) {
+    pending.evaluatorStatus = "unavailable";
+    return;
+  }
+  try {
+    const auth = await ctx.modelRegistry.getApiKeyAndHeaders(evaluator);
+    if (!auth.ok || !auth.apiKey) {
+      pending.evaluatorStatus = "unavailable";
+      return;
+    }
+    const prompt = [
+      "Evaluate whether the assistant result fulfills the user task.",
+      "Do not reward verbosity. Penalize incorrectness, missing requested work, and unsupported completion claims.",
+      'Return only minified JSON: {"score":0.0-1.0,"reason":"max 16 words"}',
+      "",
+      "Task:",
+      pending.rawPrompt.slice(0, config.quality.evaluatorMaxPromptChars),
+      "",
+      "Result:",
+      pending.outputText.slice(0, config.quality.evaluatorMaxOutputChars),
+    ].join("\n");
+    const response = await complete(
+      evaluator,
+      {
+        messages: [
+          {
+            role: "user" as const,
+            content: [{ type: "text" as const, text: prompt }],
+            timestamp: Date.now(),
+          },
+        ],
+      },
+      {
+        apiKey: auth.apiKey,
+        headers: auth.headers,
+        env: auth.env,
+        reasoningEffort: "minimal",
+        maxTokens: 100,
+        temperature: 0,
+        signal: ctx.signal,
+      },
+    );
+    const parsed = parseEvaluatorResponse(getText(response));
+    if (!parsed) {
+      pending.evaluatorStatus = "unavailable";
+      return;
+    }
+    pending.evaluatorScore = parsed.score;
+    pending.evaluatorReason = parsed.reason;
+    pending.evaluatorStatus = "measured";
+  } catch {
+    pending.evaluatorStatus = "unavailable";
+  }
+}
+
+function recordCompaction(
+  cwd: string,
+  config: TokenomyConfig,
+  tokensBefore = 0,
+  tokensAfter = 0,
+): void {
   if (!config.telemetry.enabled) return;
   const rollups = loadTelemetryRollups(cwd);
   const now = new Date().toISOString();
@@ -3203,6 +4198,10 @@ function recordCompaction(cwd: string, config: TokenomyConfig): void {
     rollups.monthly[month],
   ]) {
     bucket.compactions += 1;
+    bucket.compactionTokensBefore += Math.max(0, tokensBefore);
+    bucket.compactionTokensAfter += Math.max(0, tokensAfter);
+    bucket.compactionTokensSaved +=
+      tokensAfter > 0 ? Math.max(0, tokensBefore - tokensAfter) : 0;
   }
   saveTelemetryRollups(cwd, rollups, config);
 }
@@ -3428,8 +4427,14 @@ function classifierBudgetDecision(
     ctx,
     config.models.classifier,
     config.provider,
+    config.providers.allowed,
   );
-  const simple = findFirstModel(ctx, config.models.simple, config.provider);
+  const simple = findFirstModel(
+    ctx,
+    config.models.simple,
+    config.provider,
+    config.providers.allowed,
+  );
   const estimatedClassifierCredits = estimateRequestCredits(
     modelLabel(classifier),
     analysis.estimatedClassifierTokens,
@@ -3595,6 +4600,8 @@ function formatRoutingHistoryEntry(entry: RoutingHistoryEntry): string {
     `${entry.tier}/${entry.source}`,
     entry.model ?? "model:unknown",
     `thinking:${entry.thinking}`,
+    `mode:${entry.mode ?? "legacy"}`,
+    `language:${entry.language ?? "legacy"}`,
     `intent:${entry.intent}`,
     `risk:${entry.risk}`,
     shape,
@@ -3609,6 +4616,8 @@ function formatRoutingHistoryEntry(entry: RoutingHistoryEntry): string {
     compression,
     guard,
     memory,
+    `quality:${entry.feedback ?? "unrated"}${entry.correctionDetected ? "/corrected" : ""}${entry.evaluatorScore === undefined ? "" : `/eval:${Math.round(entry.evaluatorScore * 100)}%`}`,
+    `tool-output:${entry.toolOutputTokens ?? 0} saved:${entry.toolOutputTokensSaved ?? 0}`,
   ].join(" | ");
 }
 
@@ -3657,26 +4666,39 @@ function mergeRollupBucket(
   target.toolErrors += source.toolErrors;
   target.retryRuns += source.retryRuns;
   target.compactions += source.compactions;
-  for (const [key, value] of Object.entries(source.tiers)) {
-    target.tiers[key] = (target.tiers[key] ?? 0) + value;
-  }
-  for (const [key, value] of Object.entries(source.sources)) {
-    target.sources[key] = (target.sources[key] ?? 0) + value;
-  }
-  for (const [key, value] of Object.entries(source.intents)) {
-    target.intents[key] = (target.intents[key] ?? 0) + value;
-  }
-  for (const [key, value] of Object.entries(source.risks)) {
-    target.risks[key] = (target.risks[key] ?? 0) + value;
-  }
-  for (const [key, value] of Object.entries(source.promptShapes)) {
-    target.promptShapes[key] = (target.promptShapes[key] ?? 0) + value;
-  }
-  for (const [key, value] of Object.entries(source.actionCounts)) {
-    target.actionCounts[key] = (target.actionCounts[key] ?? 0) + value;
-  }
-  for (const [key, value] of Object.entries(source.models)) {
-    target.models[key] = (target.models[key] ?? 0) + value;
+  target.verifiedSuccessTurns += source.verifiedSuccessTurns;
+  target.partialSuccessTurns += source.partialSuccessTurns;
+  target.verifiedFailureTurns += source.verifiedFailureTurns;
+  target.correctionsDetected += source.correctionsDetected;
+  target.evaluatorMeasuredTurns += source.evaluatorMeasuredTurns;
+  target.evaluatorScoreTotal += source.evaluatorScoreTotal;
+  target.toolOutputChars += source.toolOutputChars;
+  target.toolOutputTokens += source.toolOutputTokens;
+  target.toolOutputTokensSaved += source.toolOutputTokensSaved;
+  target.duplicateToolCalls += source.duplicateToolCalls;
+  target.oversizedToolResults += source.oversizedToolResults;
+  target.truncatedToolResults += source.truncatedToolResults;
+  target.compactionTokensBefore += source.compactionTokensBefore;
+  target.compactionTokensAfter += source.compactionTokensAfter;
+  target.compactionTokensSaved += source.compactionTokensSaved;
+  for (const [targetMap, sourceMap] of [
+    [target.tiers, source.tiers],
+    [target.sources, source.sources],
+    [target.intents, source.intents],
+    [target.risks, source.risks],
+    [target.promptShapes, source.promptShapes],
+    [target.actionCounts, source.actionCounts],
+    [target.models, source.models],
+    [target.modes, source.modes],
+    [target.languages, source.languages],
+    [target.cohorts, source.cohorts],
+    [target.modeCompletedTurns, source.modeCompletedTurns],
+    [target.modeVerifiedSuccessTurns, source.modeVerifiedSuccessTurns],
+    [target.modeCredits, source.modeCredits],
+  ] as Array<[Record<string, number>, Record<string, number>]>) {
+    for (const [key, value] of Object.entries(sourceMap)) {
+      targetMap[key] = (targetMap[key] ?? 0) + value;
+    }
   }
 }
 
@@ -3691,6 +4713,20 @@ function rollupForRecentDays(
   const bucket = emptyRollupBucket();
   const now = new Date();
   for (let offset = 0; offset < days; offset += 1) {
+    const day = new Date(now.getTime() - offset * 24 * 60 * 60 * 1000);
+    mergeRollupBucket(bucket, rollups.daily[dayKey(day)]);
+  }
+  return bucket;
+}
+
+function rollupForDayRange(
+  rollups: TelemetryRollups,
+  offsetDays: number,
+  days: number,
+): TelemetryRollupBucket {
+  const bucket = emptyRollupBucket();
+  const now = new Date();
+  for (let offset = offsetDays; offset < offsetDays + days; offset += 1) {
     const day = new Date(now.getTime() - offset * 24 * 60 * 60 * 1000);
     mergeRollupBucket(bucket, rollups.daily[dayKey(day)]);
   }
@@ -3737,6 +4773,14 @@ function formatTelemetryReport(
     bucket.toolCalls > 0
       ? `${((bucket.toolErrors / bucket.toolCalls) * 100).toFixed(1)}%`
       : "n/a";
+  const verifiedTotal =
+    bucket.verifiedSuccessTurns +
+    bucket.partialSuccessTurns +
+    bucket.verifiedFailureTurns;
+  const evaluatorAverage =
+    bucket.evaluatorMeasuredTurns > 0
+      ? `${((bucket.evaluatorScoreTotal / bucket.evaluatorMeasuredTurns) * 100).toFixed(1)}%`
+      : "n/a";
   return [
     `Tokenomy telemetry report (${label})`,
     "Scope: this Pi project only; not total ChatGPT/Codex account usage",
@@ -3748,9 +4792,11 @@ function formatTelemetryReport(
     `Classifier tokens: input ${bucket.classifierInputTokens}, cached input ${bucket.classifierCacheReadTokens}, output ${bucket.classifierOutputTokens}, total ${bucket.classifierTotalTokens}`,
     `Estimated plan credits: ${formatAmount(totalCredits)} (rate card ${config.planCredits.rateCardVersion})`,
     `Completion proxy: ${bucket.completedTurns} completed, ${bucket.failedTurns} failed, ${bucket.abortedTurns} aborted, ${bucket.unknownOutcomeTurns} unknown`,
+    `Verified quality: ${bucket.verifiedSuccessTurns} success, ${bucket.partialSuccessTurns} partial, ${bucket.verifiedFailureTurns} failure (${verifiedTotal} rated); corrections: ${bucket.correctionsDetected}; evaluator average: ${evaluatorAverage} (target ${Math.round(config.quality.minEvaluatorScore * 100)}%)`,
     `Estimated credits per completed turn: ${bucket.completedTurns > 0 ? formatAmount(totalCredits / bucket.completedTurns) : "n/a"} (completion proxy, not independently verified task success)`,
     `Tool outcomes: ${bucket.toolCalls} calls, ${bucket.toolErrors} errors (${toolErrorRate}); retry runs: ${bucket.retryRuns}`,
-    `Compactions: ${bucket.compactions}`,
+    `Tool output: ${bucket.toolOutputTokens} tokens / ${bucket.toolOutputChars} chars; ${bucket.toolOutputTokensSaved} tokens removed by opt-in truncation; duplicates ${bucket.duplicateToolCalls}; oversized ${bucket.oversizedToolResults}; truncated ${bucket.truncatedToolResults}`,
+    `Compactions: ${bucket.compactions}; measured before ${bucket.compactionTokensBefore}, after ${bucket.compactionTokensAfter}, saved ${bucket.compactionTokensSaved} tokens`,
     `Pi-reported cost: $${formatAmount(bucket.costUsd + bucket.classifierCostUsd, 6)}`,
     ...(bucket.estimatedTokensSaved > 0 ||
     bucket.baselineCostUnits > 0 ||
@@ -3771,8 +4817,87 @@ function formatTelemetryReport(
     topCounters("Prompt shapes", bucket.promptShapes),
     topCounters("Action counts", bucket.actionCounts),
     topCounters("Models", bucket.models, 3),
+    topCounters("Modes", bucket.modes),
+    topCounters("Languages", bucket.languages),
+    topCounters("Experiment cohorts", bucket.cohorts),
+    topCounters("Completed by mode", bucket.modeCompletedTurns),
+    topCounters("Verified successes by mode", bucket.modeVerifiedSuccessTurns),
+    topCounters("Credits by mode", bucket.modeCredits),
     `Rollup updated: ${rollups.updatedAt || "never"}`,
     `Rollup file: ${telemetryRollupsPath(cwd)}`,
+  ].join("\n");
+}
+
+function percentChange(current: number, previous: number): string {
+  if (previous <= 0) return current > 0 ? "new" : "flat";
+  const value = ((current - previous) / previous) * 100;
+  return `${value >= 0 ? "+" : ""}${value.toFixed(1)}%`;
+}
+
+function formatQuota(
+  cwd: string,
+  config: TokenomyConfig,
+): string[] {
+  const loaded = loadAccountQuotaSnapshot(cwd, config);
+  if (!loaded.snapshot) {
+    return [
+      "Account quota: unavailable (Tokenomy never invents ChatGPT Plus limits)",
+      `Quota adapter file: ${loaded.path ?? "invalid path"}`,
+      ...(loaded.warning ? [`Quota warning: ${loaded.warning}`] : []),
+    ];
+  }
+  return [
+    `Account quota: ${loaded.snapshot.authoritative ? "authoritative" : "user-supplied"} via ${loaded.snapshot.source}`,
+    ...loaded.snapshot.windows.map((window) => {
+      const values = [
+        window.used === undefined ? undefined : `used ${window.used}`,
+        window.limit === undefined ? undefined : `limit ${window.limit}`,
+        window.remaining === undefined
+          ? undefined
+          : `remaining ${window.remaining}`,
+      ].filter(Boolean);
+      return `${window.name}: ${values.join(", ") || "no values"} ${window.unit}${window.resetsAt ? `; resets ${window.resetsAt}` : ""}`;
+    }),
+    `Quota updated: ${loaded.snapshot.updatedAt}`,
+    ...(loaded.warning ? [`Quota warning: ${loaded.warning}`] : []),
+  ];
+}
+
+function formatDashboard(
+  cwd: string,
+  config: TokenomyConfig,
+  sessionCredits: number,
+): string {
+  const rollups = loadTelemetryRollups(cwd);
+  const today = rollups.daily[dayKey(new Date())] ?? emptyRollupBucket();
+  const week = rollupForDayRange(rollups, 0, 7);
+  const previousWeek = rollupForDayRange(rollups, 7, 7);
+  const month = rollupForDayRange(rollups, 0, 30);
+  const credits = (bucket: TelemetryRollupBucket) =>
+    bucket.estimatedPlanCredits + bucket.classifierEstimatedPlanCredits;
+  const verified = (bucket: TelemetryRollupBucket) =>
+    bucket.verifiedSuccessTurns +
+    bucket.partialSuccessTurns +
+    bucket.verifiedFailureTurns;
+  const modeLines = (["save", "balanced", "quality"] as EconomyMode[]).map(
+    (mode) => {
+      const completed = month.modeCompletedTurns[mode] ?? 0;
+      const successes = month.modeVerifiedSuccessTurns[mode] ?? 0;
+      return `${mode}: prompts ${month.modes[mode] ?? 0}, completed ${completed}, verified success ${successes}, credits ${formatAmount(month.modeCredits[mode] ?? 0)}`;
+    },
+  );
+  return [
+    "Tokenomy dashboard",
+    `Today: ${today.prompts} prompts, ${today.totalTokens} tokens, ${formatAmount(credits(today))} credits`,
+    `7 days: ${week.prompts} prompts (${percentChange(week.prompts, previousWeek.prompts)} vs prior 7d), ${week.totalTokens} tokens (${percentChange(week.totalTokens, previousWeek.totalTokens)}), ${formatAmount(credits(week))} credits`,
+    `30 days quality: ${month.verifiedSuccessTurns} success / ${verified(month)} rated; ${month.correctionsDetected} corrections; ${month.failedTurns} failed turns`,
+    `30 days savings evidence: ${month.compactionTokensSaved} compaction tokens; ${month.toolOutputTokensSaved} tool-result tokens removed; ${month.truncatedToolResults} oversized tool results truncated; ${month.duplicateToolCalls} duplicate tool calls`,
+    `Session credit estimate: ${formatAmount(sessionCredits)}${config.budgets.sessionCredits > 0 ? ` / ${formatAmount(config.budgets.sessionCredits)} budget` : ""}`,
+    `Daily credit estimate: ${formatAmount(credits(today))}${config.budgets.dailyCredits > 0 ? ` / ${formatAmount(config.budgets.dailyCredits)} budget` : ""}`,
+    "Mode comparison (30 days):",
+    ...modeLines,
+    ...formatQuota(cwd, config),
+    `Evidence file: ${telemetryRollupsPath(cwd)}`,
   ].join("\n");
 }
 
@@ -3890,6 +5015,9 @@ export default function tokenomy(pi: ExtensionAPI) {
   let classifierCallsThisSession = 0;
   let turnsSinceCompaction = 0;
   let compactionInProgress = false;
+  let sessionEstimatedCredits = 0;
+  let pendingCompaction: PendingCompactionMeasurement | undefined;
+  const budgetAlerts = new Set<string>();
 
   pi.registerFlag("tokenomy-off", {
     description: "Disable the Tokenomy token-saving router for this run",
@@ -3902,6 +5030,37 @@ export default function tokenomy(pi: ExtensionAPI) {
       ? updateMeasuredTelemetry(ctx.cwd, pendingTurnTelemetry, event, config)
       : measuredAgentUsage(event, config);
     const outputText = measured.outputText ?? extractEventText(event);
+    if (pendingTurnTelemetry && outputText) {
+      pendingTurnTelemetry.outputText = [
+        pendingTurnTelemetry.outputText,
+        outputText,
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
+    sessionEstimatedCredits += measured.estimatedPlanCredits ?? 0;
+    const today = loadTelemetryRollups(ctx.cwd).daily[dayKey(new Date())];
+    const dailyCredits = today
+      ? today.estimatedPlanCredits + today.classifierEstimatedPlanCredits
+      : 0;
+    for (const [name, used, limit] of [
+      ["session", sessionEstimatedCredits, config.budgets.sessionCredits],
+      ["daily", dailyCredits, config.budgets.dailyCredits],
+    ] as Array<[string, number, number]>) {
+      if (
+        limit > 0 &&
+        used >= limit * (config.budgets.warnAtPercent / 100) &&
+        !budgetAlerts.has(name)
+      ) {
+        budgetAlerts.add(name);
+        if (ctx.hasUI) {
+          ctx.ui.notify(
+            `Tokenomy ${name} budget alert: ${formatAmount(used)} / ${formatAmount(limit)} estimated credits`,
+            "warning",
+          );
+        }
+      }
+    }
     traceEvent(debugTrace, "agent.output", outputText ? "agent output captured" : "agent output unavailable", {
       rawOutput: outputText,
       rawEvent: event,
@@ -3914,6 +5073,43 @@ export default function tokenomy(pi: ExtensionAPI) {
     if (!pendingTurnTelemetry) return;
     pendingTurnTelemetry.toolCalls += 1;
     if (event.isError) pendingTurnTelemetry.toolErrors += 1;
+  });
+
+  const toolResultApi = pi as unknown as {
+    on(
+      event: "tool_result",
+      handler: (event: {
+        toolName: string;
+        input: Record<string, unknown>;
+        content: Array<{ type: string; text?: string }>;
+      }) => unknown,
+    ): void;
+  };
+  toolResultApi.on("tool_result", (event) => {
+    if (!pendingTurnTelemetry || !config.toolEconomy.measureResults) return;
+    const text = toolResultText(event.content);
+    const tokens = text ? countTokens(text) : 0;
+    pendingTurnTelemetry.toolOutputChars += text.length;
+    pendingTurnTelemetry.toolOutputTokens += tokens;
+    const fingerprint = hashText(
+      `${event.toolName}\n${stableJson(event.input)}`,
+    );
+    if (pendingTurnTelemetry.toolFingerprints.has(fingerprint)) {
+      pendingTurnTelemetry.duplicateToolCalls += 1;
+    }
+    pendingTurnTelemetry.toolFingerprints.add(fingerprint);
+    if (tokens <= config.toolEconomy.maxResultTokens) return;
+    pendingTurnTelemetry.oversizedToolResults += 1;
+    if (!config.toolEconomy.truncateOversized) return;
+    pendingTurnTelemetry.truncatedToolResults += 1;
+    const truncated = truncateToolResultContent(event.content, config);
+    pendingTurnTelemetry.toolOutputTokensSaved += Math.max(
+      0,
+      tokens - countTokens(toolResultText(truncated)),
+    );
+    return {
+      content: truncated,
+    };
   });
 
   pi.on("after_provider_response", (event, ctx) => {
@@ -3948,6 +5144,11 @@ export default function tokenomy(pi: ExtensionAPI) {
       return;
     }
     compactionInProgress = true;
+    pendingCompaction = {
+      startedAt: new Date().toISOString(),
+      tokensBefore: usage.tokens,
+      reason: "threshold",
+    };
     if (ctx.hasUI) {
       ctx.ui.notify(
         `Tokenomy compaction started at ${usage.percent.toFixed(1)}% context use`,
@@ -3969,11 +5170,19 @@ export default function tokenomy(pi: ExtensionAPI) {
     });
   });
 
-  pi.on("session_compact", (_event, ctx) => {
+  pi.on("session_compact", (event, ctx) => {
     turnsSinceCompaction = 0;
     compactionInProgress = false;
     try {
-      recordCompaction(ctx.cwd, config);
+      const tokensBefore =
+        event.compactionEntry.tokensBefore || pendingCompaction?.tokensBefore || 0;
+      const contextAfter = ctx.getContextUsage()?.tokens;
+      const tokensAfter =
+        typeof contextAfter === "number" && contextAfter < tokensBefore
+          ? contextAfter
+          : 0;
+      recordCompaction(ctx.cwd, config, tokensBefore, tokensAfter);
+      pendingCompaction = undefined;
     } catch (error) {
       traceEvent(debugTrace, "compaction.telemetry.error", "failed to record compaction", {
         error,
@@ -3986,6 +5195,7 @@ export default function tokenomy(pi: ExtensionAPI) {
     pendingTurnTelemetry = undefined;
     if (pendingTurn) {
       markTurnUsageUnavailable(ctx.cwd, pendingTurn, config);
+      await evaluateTurnQuality(pendingTurn, config, ctx);
       finalizeTurnOutcome(ctx.cwd, pendingTurn, config);
     }
     const pendingRestore = pendingStateRestore;
@@ -4000,7 +5210,10 @@ export default function tokenomy(pi: ExtensionAPI) {
   });
 
   pi.on("session_start", async (_event, ctx) => {
-    const loaded = loadConfig(ctx.cwd);
+    let loaded = loadConfig(ctx.cwd);
+    const refresh = await refreshExternalRateCard(ctx.cwd, loaded.config);
+    if (refresh.refreshed) loaded = loadConfig(ctx.cwd);
+    if (refresh.warning) loaded.warnings.push(refresh.warning);
     config = loaded.config;
     configWarnings = loaded.warnings;
     if (pi.getFlag("tokenomy-off")) config = { ...config, enabled: false };
@@ -4008,8 +5221,11 @@ export default function tokenomy(pi: ExtensionAPI) {
     pendingStateRestore = undefined;
     pendingTurnTelemetry = undefined;
     classifierCallsThisSession = 0;
+    sessionEstimatedCredits = 0;
+    budgetAlerts.clear();
     turnsSinceCompaction = config.contextEconomy.cooldownTurns;
     compactionInProgress = false;
+    pendingCompaction = undefined;
     debugTrace = config.debug.trace ? startDebugTrace(ctx.cwd) : undefined;
     traceEvent(
       debugTrace,
@@ -4057,11 +5273,20 @@ export default function tokenomy(pi: ExtensionAPI) {
       source: event.source,
       rawEvent: event,
     });
-    if (shouldBypassForLanguage(event.text)) {
+    if (shouldBypassForLanguage(event.text, config)) {
       traceEvent(debugTrace, "language.bypass", "input bypassed by language detector", {
         rawInput: event.text,
       });
       return { action: "continue" as const };
+    }
+    if (correctionSignal(event.text)) {
+      try {
+        markLatestCorrection(ctx.cwd, config);
+      } catch (error) {
+        traceEvent(debugTrace, "quality.correction.error", "failed to record correction", {
+          error,
+        });
+      }
     }
     const usage = ctx.getContextUsage();
     const contextTokens = usage?.tokens ?? undefined;
@@ -4089,7 +5314,7 @@ export default function tokenomy(pi: ExtensionAPI) {
       rawSystemPrompt: event.systemPrompt,
       rawEvent: event,
     });
-    if (shouldBypassForLanguage(event.prompt)) {
+    if (shouldBypassForLanguage(event.prompt, config)) {
       traceEvent(debugTrace, "language.bypass", "prompt bypassed by language detector", {
         rawPrompt: event.prompt,
       });
@@ -4135,6 +5360,8 @@ export default function tokenomy(pi: ExtensionAPI) {
     let classifierPromptTelemetry: ClassifierPromptTelemetry | undefined;
     let classifierUsage: UsageTotals | undefined;
     let classifierEstimatedPlanCredits: number | undefined;
+    const experiment = experimentForPrompt(event.prompt, config);
+    const shadowTiers = shadowTiersFor(analysis, config, stats);
     const heuristicUncertain =
       analysis.confidence < config.classifier.minConfidence;
     const classifierKey = classifierCacheKey(
@@ -4251,7 +5478,12 @@ export default function tokenomy(pi: ExtensionAPI) {
 
     let target: Model<Api> | undefined;
     if (source === "fallback") {
-      const fallbackTier = fallbackTierFor(analysis, config, stats);
+      const fallbackTier = fallbackTierFor(
+        analysis,
+        config,
+        stats,
+        experiment.mode,
+      );
       if (fallbackTier !== "simple") stats.adaptiveFallbacks += 1;
       tier = fallbackTier;
       target = findFallbackModelForTier(ctx, config, fallbackTier);
@@ -4266,7 +5498,12 @@ export default function tokenomy(pi: ExtensionAPI) {
         intent: analysis.intent,
       });
     } else {
-      target = findFirstModel(ctx, config.models[tier], config.provider);
+      target = findFirstModel(
+        ctx,
+        config.models[tier],
+        config.provider,
+        config.providers.allowed,
+      );
     }
     if (!target) {
       target = findBestConfiguredFallbackModel(ctx, config);
@@ -4298,6 +5535,9 @@ export default function tokenomy(pi: ExtensionAPI) {
       model: modelLabel(target),
       promptShape: analysis.promptShape,
       thinking,
+      mode: experiment.mode,
+      experimentCohort: experiment.cohort,
+      shadowTiers,
     };
     traceEvent(debugTrace, "route.selected", `${tier}/${source} -> ${decision.model ?? "current model"} thinking=${thinking}`, {
       decision,
@@ -4436,6 +5676,17 @@ export default function tokenomy(pi: ExtensionAPI) {
             usageRecorded: false,
             toolCalls: 0,
             toolErrors: 0,
+            rawPrompt: event.prompt,
+            mode: decision.mode,
+            language: analysis.language,
+            experimentCohort: decision.experimentCohort,
+            toolOutputChars: 0,
+            toolOutputTokens: 0,
+            toolOutputTokensSaved: 0,
+            duplicateToolCalls: 0,
+            oversizedToolResults: 0,
+            truncatedToolResults: 0,
+            toolFingerprints: new Set<string>(),
           };
         }
         recordTelemetryRollup(
@@ -4501,7 +5752,7 @@ export default function tokenomy(pi: ExtensionAPI) {
 
   pi.registerCommand("tokenomy", {
     description:
-      "Show or change Tokenomy token-router status: /tokenomy [on|off|mode save|mode balanced|mode quality|reload|status|explain|history|report|limits|compact|memory|debug on|debug off|debug path|export-history|export-report|reset-history|reset-stats|dry-run on|dry-run off]",
+      "Token economy controls and evidence: /tokenomy [status|dashboard|feedback success|feedback partial|feedback failure|quota|report|limits|compact|...]",
     handler: async (args, ctx) => {
       const action = args.trim().toLowerCase() || "status";
       if (action === "on") {
@@ -4585,6 +5836,49 @@ export default function tokenomy(pi: ExtensionAPI) {
         }
         return;
       }
+      if (
+        action === "feedback success" ||
+        action === "feedback partial" ||
+        action === "feedback failure"
+      ) {
+        const rating = action.slice("feedback ".length) as FeedbackRating;
+        try {
+          const entry = recordLatestFeedback(ctx.cwd, rating, config);
+          ctx.ui.notify(
+            entry
+              ? `Tokenomy feedback recorded: ${rating} for ${entry.tier}/${entry.source} (${entry.model ?? "unknown model"})`
+              : "Tokenomy feedback unavailable: no completed routed turn",
+            entry ? "info" : "warning",
+          );
+        } catch (error) {
+          ctx.ui.notify(
+            `Tokenomy feedback warning: ${error instanceof Error ? error.message : String(error)}`,
+            "warning",
+          );
+        }
+        return;
+      }
+      if (action === "dashboard") {
+        try {
+          ctx.ui.notify(
+            formatDashboard(ctx.cwd, config, sessionEstimatedCredits),
+            "info",
+          );
+        } catch (error) {
+          ctx.ui.notify(
+            `Tokenomy dashboard warning: ${error instanceof Error ? error.message : String(error)}`,
+            "warning",
+          );
+        }
+        return;
+      }
+      if (action === "quota") {
+        ctx.ui.notify(
+          ["Tokenomy account quota", ...formatQuota(ctx.cwd, config)].join("\n"),
+          "info",
+        );
+        return;
+      }
       if (action === "report" || action.startsWith("report ")) {
         try {
           const report = telemetryReportForAction(ctx.cwd, action);
@@ -4636,6 +5930,11 @@ export default function tokenomy(pi: ExtensionAPI) {
           return;
         }
         compactionInProgress = true;
+        pendingCompaction = {
+          startedAt: new Date().toISOString(),
+          tokensBefore: ctx.getContextUsage()?.tokens ?? 0,
+          reason: "manual",
+        };
         ctx.ui.notify("Tokenomy compaction started", "info");
         ctx.compact({
           customInstructions: config.contextEconomy.customInstructions,
@@ -4771,6 +6070,9 @@ export default function tokenomy(pi: ExtensionAPI) {
           `Source: ${lastDecision.source}`,
           `Model: ${lastDecision.model ?? "none"}`,
           `Thinking: ${lastDecision.thinking}`,
+          `Economy mode: ${lastDecision.mode}`,
+          `Experiment cohort: ${lastDecision.experimentCohort ?? "none"}`,
+          `Shadow tiers: ${lastDecision.shadowTiers ? Object.entries(lastDecision.shadowTiers).map(([mode, tier]) => `${mode}:${tier}`).join(", ") : "none"}`,
           `Intent: ${lastDecision.intent}`,
           `Risk: ${lastDecision.risk}`,
           `Tool profile: ${lastDecision.toolProfile}`,
@@ -4783,7 +6085,10 @@ export default function tokenomy(pi: ExtensionAPI) {
         return;
       }
       if (action === "reload") {
-        const loaded = loadConfig(ctx.cwd);
+        let loaded = loadConfig(ctx.cwd);
+        const refresh = await refreshExternalRateCard(ctx.cwd, loaded.config);
+        if (refresh.refreshed) loaded = loadConfig(ctx.cwd);
+        if (refresh.warning) loaded.warnings.push(refresh.warning);
         config = loaded.config;
         configWarnings = loaded.warnings;
         ctx.ui.notify(
@@ -4800,7 +6105,12 @@ export default function tokenomy(pi: ExtensionAPI) {
         `Version: ${packageVersion()}`,
         `Economy mode: ${config.mode}`,
         `Provider: ${config.provider}`,
+        `Allowed providers: ${config.providers.allowed.join(", ")}`,
+        `Live model discovery: ${config.providers.autoDiscoverModels ? "enabled" : "disabled"}`,
         `Classifier: ${config.classifier.enabled ? "enabled" : "disabled"} (${config.classifier.onlyWhenAmbiguous ? "ambiguous only" : "all eligible"}, ${classifierCallsThisSession}/${config.classifier.maxCallsPerSession} live calls this session)`,
+        `Quality evaluator: ${config.quality.evaluatorEnabled ? "enabled" : "disabled"}; correction detection: ${config.quality.correctionDetection ? "enabled" : "disabled"}`,
+        `Mode experiments: ${config.experiments.enabled ? `enabled (${config.experiments.modes.join(", ")}, sample ${Math.round(config.experiments.sampleRate * 100)}%)` : "disabled"}`,
+        `Routing languages: ${config.languages.enabled.join(", ")}`,
         `Telemetry: ${config.telemetry.enabled ? "enabled" : "disabled"} (${config.telemetry.maxEntries} history entries, ${config.telemetry.rollupRetentionDays} rollup days)`,
         memorySummary(safeLoadProjectMemory(ctx.cwd), config),
         `Prompt simplification: ${config.promptSimplification.enabled ? "enabled" : "disabled"}`,
@@ -4810,6 +6120,7 @@ export default function tokenomy(pi: ExtensionAPI) {
         `Restore thinking after prompt: ${config.routing.restoreThinkingAfterPrompt ? "enabled" : "disabled"}`,
         `Debug trace: ${debugTrace ? `enabled (${debugTrace.path})` : "disabled"}`,
         `Tool management: ${config.tools.manage ? "enabled" : "disabled"}`,
+        `Tool-result economy: measure ${config.toolEconomy.measureResults ? "on" : "off"}, truncation ${config.toolEconomy.truncateOversized ? "on" : "off"}`,
         `Last decision: ${lastDecision ? `${lastDecision.tier} via ${lastDecision.source}, model=${lastDecision.model ?? "none"}, thinking=${lastDecision.thinking}, reason=${lastDecision.reason}` : "none"}`,
         `Usage accounting: measured after agent_end; unavailable turns are explicit`,
         `Plan credit estimates: ${config.planCredits.enabled ? `enabled (rate card ${config.planCredits.rateCardVersion})` : "disabled"}`,

@@ -23,6 +23,17 @@ npm test
 The tests use Node's built-in test runner and a mocked Pi runtime. They do not
 make real model calls.
 
+Signed-in live evaluation is deliberately separate because it consumes real
+quota:
+
+```bash
+TOKENOMY_LIVE_EVAL=1 npm run test:live
+```
+
+Use `TOKENOMY_LIVE_EVALUATOR=1` only when the additional evaluator call is
+intended. The manual `Live Tokenomy Evaluation` workflow requires a
+self-hosted runner with an existing Pi sign-in.
+
 GitHub Actions runs JSON validation, strict typechecking, and `npm test` on
 every push and pull request targeting `main`.
 
@@ -46,7 +57,9 @@ Repository setup required:
 The `NPM Publish` workflow checks whether `package.json`'s version already
 exists on npm. If it does not exist, it publishes the package. Prerelease
 versions such as `0.1.0-beta` are published with the `beta` dist-tag; stable
-versions are published with `latest`.
+versions are published with `latest`. After npm confirms the exact version, the
+workflow creates and pushes `v<version>` and creates or updates the matching
+GitHub Release as latest. These steps are idempotent for workflow reruns.
 
 If `NPM_TOKEN` is missing, the workflow exits successfully with a warning so
 normal CI stays green. After adding the secret, rerun the workflow manually:
@@ -105,8 +118,12 @@ Before tagging a release:
 
 - `npm run typecheck` passes
 - `npm test` passes
+- optional signed-in `TOKENOMY_LIVE_EVAL=1 npm run test:live` evidence is
+  reviewed for routing-policy changes
 - `pi --offline --approve --no-session --list-models openai-codex` loads the extension
 - README and INSTALL recommend the current install path
 - CONFIG, SECURITY, COMPATIBILITY, and LIMITATIONS match the implemented defaults
 - `CHANGELOG.md` has a dated version entry
 - compatibility notes mention any Pi API assumptions
+- npm publish automation will create the matching tag and GitHub Release; do
+  not manually tag before the package version is verified on npm

@@ -53,9 +53,20 @@ likely to cost more through retries, excessive tool calls, or incorrect edits.
   reasoning, total-token, request, and cost usage after each turn.
 - Builds daily, monthly, and lifetime telemetry rollups with explicit
   measured/unavailable coverage, configurable plan-credit estimates,
-  completion/tool-error proxies, and compaction counts.
+  completion/tool-error proxies, verified user feedback, correction signals,
+  evaluator scores, tool-output measurements, and measured compaction savings.
+- Provides `/tokenomy dashboard` with 7/30-day trends, budgets, quality
+  evidence, mode comparisons, and quota-adapter status.
+- Supports deterministic opt-in economy-mode experiments with no-cost shadow
+  tier decisions.
+- Routes English, Ukrainian, Russian, Spanish, French, German, and Portuguese
+  instructions locally.
+- Supports provider-qualified model IDs, provider allowlists, optional live
+  model discovery, and a validated external rate-card file.
 - Shows recognized provider limit headers when available, with explicit
   project/process scope.
+- Accepts an explicit account-quota snapshot from a user/companion adapter
+  without inventing unavailable ChatGPT Plus totals.
 - Supports manual task-preserving compaction and opt-in threshold compaction.
 
 Tokenomy does not rewrite the final prompt sent to the selected agent model.
@@ -64,20 +75,21 @@ user prompt always overrides remembered project facts.
 
 ## Current Scope
 
-Tokenomy is currently focused on one well-defined setup:
+Tokenomy's shipped defaults remain focused on one well-defined setup:
 
 - Pi users authenticated with ChatGPT Plus/Pro Codex access.
-- The `openai-codex` model family exposed by Pi.
+- The `openai-codex` model family exposed by Pi. Other providers are supported
+  through provider-qualified model IDs and an explicit allowlist.
 - Project-local routing through `.pi/extensions/tokenomy/index.ts`.
 - Local-only memory, cache, telemetry, and compression. No external database or
   external memory API is used.
-- English-language routing instructions. Prompts written primarily in other
-  languages bypass Tokenomy routing for that turn.
+- Local routing signals for English, Ukrainian, Russian, Spanish, French,
+  German, and Portuguese. Unknown scripts bypass routing for that turn.
 
 Tokenomy is still beta software. It is ready for private dogfooding and early
 adopter use, but it is not yet a universal model router for every provider,
-model catalog, or coding-agent runtime. Other providers and Codex-native
-adapters can be added later; the current defaults are intentionally optimized
+model catalog, or coding-agent runtime. Multi-provider configuration is
+available, but the shipped tiers and rate card remain intentionally optimized
 for Codex models available to Plus/Pro users through Pi.
 
 ## Files
@@ -132,6 +144,11 @@ Useful commands inside Pi:
 /tokenomy reload
 /tokenomy explain
 /tokenomy history
+/tokenomy dashboard
+/tokenomy feedback success
+/tokenomy feedback partial
+/tokenomy feedback failure
+/tokenomy quota
 /tokenomy report
 /tokenomy report 7d
 /tokenomy report 30d
@@ -160,6 +177,13 @@ Useful commands inside Pi:
 mode, and the plan rate-card version.
 `/tokenomy explain` shows the signals and reason for the last routing decision.
 `/tokenomy history` shows recent prompt-safe routing telemetry.
+`/tokenomy dashboard` shows project-local trends, quality evidence, budget
+alerts, tool/compaction measurements, and per-mode comparisons.
+`/tokenomy feedback success|partial|failure` attaches a verified user rating to
+the latest completed routed turn.
+`/tokenomy quota` reads a validated project-local account snapshot. ChatGPT
+Plus does not expose a public personal quota API to Tokenomy, so missing totals
+are displayed as unavailable rather than guessed.
 `/tokenomy report` shows a 30-day local telemetry report with measured token
 usage, cache-read ratio, estimated plan credits, completion/tool-error proxies,
 route distribution, and fallback/guard counts.
@@ -175,6 +199,23 @@ can see them; it is not an account-wide quota report.
 `/tokenomy reset-history` clears local routing history.
 `/tokenomy debug on` starts an opt-in raw local JSONL trace for debugging
 Tokenomy decisions, and `/tokenomy debug off` stops it.
+
+## Live evaluation
+
+Normal CI uses mocked providers and never consumes plan quota. After signing in
+to Pi, run the opt-in production scenarios with:
+
+```bash
+TOKENOMY_LIVE_EVAL=1 npm run test:live
+```
+
+The runner uses a temporary project, verifies a simple answer and two coding
+tasks, and writes routing/usage evidence to
+`tokenomy-live-evidence.json` inside that temporary directory. Set
+`TOKENOMY_LIVE_EVALUATOR=1` to include the independent model evaluator, or
+`TOKENOMY_LIVE_EVAL_OUTPUT=/path/evidence.json` to choose the artifact path.
+The manual `Live Tokenomy Evaluation` workflow runs the same suite only on a
+self-hosted runner that is already signed in to Pi.
 
 Routing decision notifications are enabled by default so you can see when
 Tokenomy switches models. To disable them, set `ui.notifyDecisions` to `false`
@@ -328,7 +369,8 @@ Longer-term telemetry is stored in
 prompt-safe aggregates. Rollups include exact provider-reported token
 categories, cache-read ratio inputs, request counts, Pi-reported cost,
 rate-card-based plan-credit estimates, classifier overhead, route distribution,
-adaptive fallbacks, prompt shape, and compression guard rejections. Historical
+adaptive fallbacks, prompt shape, quality feedback, experiment cohorts,
+tool-output measurements, compaction savings, and compression guard rejections. Historical
 non-zero `estimatedTokensSaved`/cost-unit fields are labeled as pre-v2 model-rank
 proxies and are never presented as tokens or credits.
 

@@ -32,6 +32,24 @@ Each list is ordered by preference. Tokenomy chooses the first available model
 from the selected tier. Model IDs can be plain IDs such as `gpt-5.4-mini` or
 provider-qualified IDs such as `openai-codex/gpt-5.4-mini`.
 
+### Providers and live catalog
+
+```json
+{
+  "providers": {
+    "allowed": ["openai-codex"],
+    "autoDiscoverModels": false
+  }
+}
+```
+
+`allowed` is a security/cost boundary: configured or discovered models outside
+the list are ignored. Add providers such as `anthropic` only when the tier
+lists contain suitable provider-qualified IDs. `autoDiscoverModels` lets
+Tokenomy use Pi's live available-model catalog when configured tier models are
+missing; it is off by default because catalog cost metadata and model
+capability ordering vary by provider.
+
 ## Thinking
 
 ```json
@@ -74,6 +92,46 @@ net benefit is below `minEstimatedNetCredits` or the session reaches
 `maxCallsPerSession`. Cached decisions remain available without consuming the
 live-call budget.
 
+## Quality Evidence
+
+```json
+{
+  "quality": {
+    "correctionDetection": true,
+    "evaluatorEnabled": false,
+    "evaluatorModels": ["gpt-5.4-mini"],
+    "evaluatorMaxPromptChars": 4000,
+    "evaluatorMaxOutputChars": 6000,
+    "minEvaluatorScore": 0.8
+  }
+}
+```
+
+Use `/tokenomy feedback success`, `/tokenomy feedback partial`, or
+`/tokenomy feedback failure` after a completed turn. Correction detection
+marks the preceding turn when a later user prompt contains a supported
+correction phrase. The independent evaluator is opt-in because it sends a
+bounded copy of the task and output through an additional authenticated model
+call. Its score is evidence, not ground truth.
+
+## Mode Experiments
+
+```json
+{
+  "experiments": {
+    "enabled": false,
+    "sampleRate": 1,
+    "modes": ["save", "balanced", "quality"]
+  }
+}
+```
+
+When enabled, normalized prompts are deterministically assigned to an economy
+mode. The same prompt stays in the same cohort. Tokenomy also records the tier
+each other mode would have chosen during risk-aware fallback, without making
+extra model calls. `/tokenomy dashboard` compares prompts, completed turns,
+verified successes, and estimated credits by mode.
+
 ## Plan Credits
 
 ```json
@@ -96,6 +154,100 @@ Rates are estimated plan credits per one million tokens. The bundled table is a
 versioned snapshot; override it when OpenAI changes the rate card or when using
 different model IDs. Set `enabled` to `false` to retain measured tokens without
 calculating plan credits or classifier break-even estimates.
+
+For automated rate updates, write a validated project-local file:
+
+```json
+{
+  "version": 1,
+  "effectiveAt": "2026-07-27T00:00:00Z",
+  "source": "https://example.invalid/provider-rate-card",
+  "rates": {
+    "gpt-5.4-mini": {
+      "input": 18.75,
+      "cacheRead": 1.875,
+      "output": 113
+    }
+  }
+}
+```
+
+The location and staleness warning are configured with:
+
+```json
+{
+  "registry": {
+    "rateCardPath": ".pi/tokenomy-rate-card.json",
+    "rateCardUrl": "",
+    "refreshHours": 24,
+    "maxAgeDays": 30
+  }
+}
+```
+
+The file path must stay inside the project. Valid external entries override
+bundled/configured rates by model ID and the report labels the external
+effective date. Set `rateCardUrl` to an explicit HTTPS JSON endpoint to refresh
+the file automatically when its `effectiveAt` is older than `refreshHours`.
+Downloads are bounded to 256 KB, validated before replacing the local file, and
+time out after ten seconds. An empty URL (the default) disables networking.
+
+## Account Quota Adapter
+
+Personal ChatGPT Plus usage totals are not exposed through a public account
+quota API available to Tokenomy. `/tokenomy quota` therefore reads only an
+explicit adapter snapshot and otherwise says `unavailable`.
+
+```json
+{
+  "version": 1,
+  "scope": "account",
+  "source": "user",
+  "authoritative": false,
+  "updatedAt": "2026-07-27T12:00:00Z",
+  "note": "Copied from the Codex usage dashboard",
+  "windows": [
+    {
+      "name": "rolling window",
+      "used": 40,
+      "limit": 100,
+      "remaining": 60,
+      "unit": "percent",
+      "resetsAt": "2026-07-27T15:00:00Z"
+    }
+  ]
+}
+```
+
+Supported sources are `user`, `companion`, and `enterprise-analytics`.
+Supported units are `credits`, `percent`, `requests`, and `tokens`.
+
+```json
+{
+  "quota": {
+    "accountSnapshotPath": ".pi/tokenomy-account-quota.json",
+    "staleAfterMinutes": 60
+  }
+}
+```
+
+Do not put credentials or cookies in this file.
+
+## Credit Budgets and Alerts
+
+```json
+{
+  "budgets": {
+    "sessionCredits": 0,
+    "dailyCredits": 0,
+    "warnAtPercent": 80
+  }
+}
+```
+
+Zero disables that budget. Alerts are emitted once per session when the
+measured estimate reaches the configured percentage. They are advisory because
+plan-credit conversion is an estimate.
 
 ## Cache
 
@@ -138,7 +290,7 @@ compression was accepted or rejected by the semantic guard, how many protected
 signal lines triggered the guard, and the attempted compression savings. They
 do not store raw prompt text or model responses.
 
-Durable telemetry rollups use schema version 2 and are stored in
+Durable telemetry rollups use schema version 3 and are stored in
 `.pi/tokenomy-cache/telemetry-rollups.json`. Rollups are aggregated by day,
 month, and lifetime, so Tokenomy can report usage even after recent history
 entries are capped. They include measured token categories, cache inputs,
@@ -146,9 +298,15 @@ request counts, measured/unavailable coverage, Pi-reported cost, estimated
 ChatGPT plan credits, classifier overhead, tier/source/intent/model
 distribution, adaptive fallbacks, prompt-shape distribution, action-count
 distribution, multi-step prompt counts, completion proxies, tool calls/errors,
-retry runs, compactions, and compression guard rejections.
+retry runs, feedback/correction/evaluator evidence, mode/language/cohort
+distribution, tool-output size/duplicate/truncation/saved-token counters, measured
+compaction before/after/saved tokens, and compression guard rejections.
 `rollupRetentionDays` controls daily rollup retention and defaults to 400 days;
 monthly and lifetime rollups are retained.
+
+`/tokenomy dashboard` summarizes today, recent 7-day changes, a 30-day quality
+and savings view, configured budgets, account-quota adapter status, and
+per-mode comparisons.
 
 The default plan-credit estimate uses the OpenAI Codex rate card snapshot dated
 `2026-07-27`. Token counts are measured; the conversion is explicitly an
@@ -181,6 +339,39 @@ cookies, and unrelated response headers are not stored.
 Use `/tokenomy compact` for an immediate, task-preserving compaction. Automatic
 compaction is opt-in; when enabled, it runs only above both the percentage and
 token thresholds, while Pi is idle, and after the configured cooldown.
+
+## Tool Result Economy
+
+```json
+{
+  "toolEconomy": {
+    "measureResults": true,
+    "truncateOversized": false,
+    "maxResultTokens": 6000,
+    "preserveHeadChars": 12000,
+    "preserveTailChars": 6000
+  }
+}
+```
+
+Measurement stores only aggregate character/token counts, removed-token counts,
+and duplicate tool call fingerprints. Raw arguments and results are not persisted. Truncation is
+opt-in and applies only when a text result exceeds `maxResultTokens`; configured
+head and tail regions plus an explicit marker are kept.
+
+## Languages
+
+```json
+{
+  "languages": {
+    "enabled": ["en", "uk", "ru", "es", "fr", "de", "pt"]
+  }
+}
+```
+
+The local dictionaries cover common coding-agent actions in English,
+Ukrainian, Russian, Spanish, French, German, and Portuguese. Remove a language
+to make Tokenomy bypass it. Unknown scripts are always bypassed.
 
 ## Routing
 

@@ -30,14 +30,18 @@ size, context bucket, selected tier/source/model, confidence, signals, usage
 status, provider-reported token/cost totals, and estimated plan credits. For
 live classifier calls, it also includes classifier usage and compression guard
 status/counts, but not the protected signal-line text. It does not store raw
-prompt text or model responses.
+prompt text or model responses. It can also store language/mode labels,
+experiment cohorts, user feedback, correction flags, evaluator scores, and
+aggregate tool-result sizes. It never stores raw tool arguments or results.
 
 Telemetry rollups are stored in `.pi/tokenomy-cache/telemetry-rollups.json`.
 They aggregate daily, monthly, and lifetime counters such as input/cached/output
 tokens, optional reasoning, request counts, cost, plan-credit estimates,
 measured/unavailable coverage, route distribution, classifier overhead,
 adaptive fallbacks, prompt shape, completion stop-reason categories, tool
-call/error counts, retry runs, compactions, and compression guard rejections.
+call/error counts, retry runs, compactions, verified-feedback counts, evaluator
+score totals, tool-output sizes, duplicate-call counts, truncation counts, and
+removed-token counts, plus measured compaction token deltas.
 Rollups do not store raw prompt text, prompt hashes, tool arguments/results,
 model responses, API keys, or auth headers.
 
@@ -50,6 +54,15 @@ an account-wide ledger.
 
 Tokenomy does not store raw prompt text, model responses, API keys, or auth
 headers during normal operation.
+
+External rate cards and account-quota snapshots must use project-relative
+paths. Tokenomy rejects absolute paths and paths that escape the project root.
+Account quota files are supplied by the user or a companion/Enterprise adapter;
+they should contain counters only, never cookies, OAuth tokens, or API keys.
+An explicitly configured `registry.rateCardUrl` performs an HTTPS GET during
+session startup only when the current card is stale by `refreshHours`. The
+response is size-limited and schema-validated before it replaces the local
+rate-card file.
 
 If `debug.trace` is explicitly enabled, Tokenomy writes a local JSONL debug
 trace under `.pi/tokenomy-cache/debug/session-*.jsonl`. This trace may include
@@ -73,6 +86,11 @@ current user prompt.
 The local heuristic uses no model tokens. If the classifier is enabled,
 Tokenomy may send an ambiguous prompt excerpt to the configured classifier model
 through Pi's authenticated provider.
+
+If `quality.evaluatorEnabled` is explicitly enabled, Tokenomy sends a bounded
+copy of the current task and assistant output to the configured evaluator
+model. This does not persist the raw content in normal telemetry, but it is an
+additional authenticated model call and consumes quota.
 
 For large prompts, Tokenomy can simplify the classifier excerpt locally before
 the classifier call. This reduces prompt size but may still include relevant
