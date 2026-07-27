@@ -4,7 +4,9 @@ Tokenomy currently targets a narrow environment by design.
 
 ## Supported
 
-- Pi with project-local extension support
+- Pi packages `@earendil-works/pi-ai` and
+  `@earendil-works/pi-coding-agent` version `0.82.x` (typechecked against
+  `0.82.1`)
 - `pi install npm:tokenomy-pi`
 - `pi install https://github.com/adyshev/tokenomy`
 - Node.js 22.19 or newer
@@ -20,6 +22,9 @@ Tokenomy currently targets a narrow environment by design.
 - Tokenomy expects `@earendil-works/pi-coding-agent` extension APIs.
 - Model IDs must exist in the selected provider registry.
 - `pi.setModel()` and `pi.setThinkingLevel()` are available.
+- `pi.getThinkingLevel()` is available.
+- Pi emits `agent_end` with assistant-message usage and `agent_settled` after
+  retries/continuations have finished.
 - `ctx.getContextUsage()` may return token usage, but Tokenomy tolerates it
   being unavailable.
 
@@ -39,4 +44,11 @@ change active tools.
 
 - Non-Codex provider presets
 - automatic install/update across multiple projects
-- exact provider billing/token accounting
+- account-wide ChatGPT/Codex quota, reset-window, or credit-balance integration
+- causal savings or cost-per-success evaluation
+
+## Telemetry Compatibility
+
+Telemetry rollup schema version 2 is backward-loading: older route and rollup
+files continue to load. Old savings/cost-unit fields remain legacy proxies.
+New turns use exact provider-reported usage and explicit unavailable status.

@@ -78,10 +78,12 @@ function createHarness(cwd, options = {}) {
   const notifications = [];
   const statuses = new Map();
   const models = options.models ?? MODELS;
+  let currentThinking = options.initialThinking ?? "high";
 
   const ctx = {
     cwd,
-    model: undefined,
+    model: options.initialModel,
+    thinkingLevel: currentThinking,
     signal: new AbortController().signal,
     hasUI: true,
     getContextUsage: () => ({ tokens: options.contextTokens ?? 12_000 }),
@@ -125,7 +127,12 @@ function createHarness(cwd, options = {}) {
       return true;
     },
     setThinkingLevel(level) {
+      currentThinking = level;
+      ctx.thinkingLevel = level;
       thinkingLevels.push(level);
+    },
+    getThinkingLevel() {
+      return currentThinking;
     },
     getAllTools() {
       return [
@@ -176,8 +183,36 @@ async function routePrompt(harness, prompt) {
   );
 }
 
-async function finishAgent(harness, eventName = "after_agent_end", event = {}) {
-  return harness.handlers.get(eventName)?.(event, harness.ctx);
+async function finishAgent(harness, event = {}) {
+  await harness.handlers.get("agent_end")?.(event, harness.ctx);
+  return harness.handlers.get("agent_settled")?.(
+    { type: "agent_settled" },
+    harness.ctx,
+  );
+}
+
+function assistantMessage(model, usage = {}) {
+  return {
+    role: "assistant",
+    model,
+    content: [{ type: "text", text: "done" }],
+    usage: {
+      input: 1_000,
+      output: 200,
+      cacheRead: 3_000,
+      cacheWrite: 0,
+      reasoning: 50,
+      totalTokens: 4_200,
+      cost: {
+        input: 0.01,
+        output: 0.02,
+        cacheRead: 0.003,
+        cacheWrite: 0,
+        total: 0.033,
+      },
+      ...usage,
+    },
+  };
 }
 
 function inputPrompt(harness, text) {
@@ -209,6 +244,32 @@ test("starts on the configured complex baseline model", async () => {
 
   assert.equal(harness.selectedModels.at(-1), "openai-codex/gpt-5.5");
   assert.equal(harness.statuses.has("tokenomy"), false);
+});
+
+test("does not override a user-selected model at session start", async () => {
+  const harness = createHarness(createProjectConfig(), {
+    initialModel: MODELS[0],
+  });
+
+  await startSession(harness);
+
+  assert.equal(harness.ctx.model.id, "gpt-5.4");
+  assert.equal(harness.selectedModels.length, 0);
+  await runTokenomyCommand(harness, "status");
+  assert.match(
+    harness.notifications.at(-1).message,
+    /Baseline model: openai-codex\/gpt-5\.4/,
+  );
+});
+
+test("registers the current Pi lifecycle events", () => {
+  const harness = createHarness(createProjectConfig());
+
+  assert.equal(harness.handlers.has("agent_end"), true);
+  assert.equal(harness.handlers.has("agent_settled"), true);
+  assert.equal(harness.handlers.has("after_agent_end"), false);
+  assert.equal(harness.handlers.has("after_agent_finish"), false);
+  assert.equal(harness.handlers.has("after_agent_complete"), false);
 });
 
 test("switches down for simple prompts and back up for complex prompts", async () => {
@@ -246,22 +307,38 @@ test("switches down for simple prompts and back up for complex prompts", async (
   );
 });
 
-test("restores the pre-route model after a prompt finishes", async () => {
+test("restores the pre-route model and thinking after the agent settles", async () => {
   const harness = createHarness(createProjectConfig());
   await startSession(harness);
 
   await routePrompt(harness, "What time is it?");
 
   assert.equal(harness.selectedModels.at(-1), "openai-codex/gpt-5.4-mini");
-  await finishAgent(harness);
-
-  assert.equal(harness.selectedModels.at(-1), "openai-codex/gpt-5.5");
-  assert.match(
-    harness.notifications.at(-1).message,
-    /Tokenomy restored model -> openai-codex\/gpt-5\.5/,
+  await harness.handlers.get("agent_end")(
+    {
+      type: "agent_end",
+      messages: [assistantMessage("gpt-5.4-mini")],
+    },
+    harness.ctx,
   );
 
-  await finishAgent(harness, "after_agent_finish");
+  assert.equal(harness.selectedModels.at(-1), "openai-codex/gpt-5.4-mini");
+  await harness.handlers.get("agent_settled")(
+    { type: "agent_settled" },
+    harness.ctx,
+  );
+
+  assert.equal(harness.selectedModels.at(-1), "openai-codex/gpt-5.5");
+  assert.equal(harness.thinkingLevels.at(-1), "high");
+  assert.match(
+    harness.notifications.at(-1).message,
+    /Tokenomy restored model -> openai-codex\/gpt-5\.5, thinking -> high/,
+  );
+
+  await harness.handlers.get("agent_settled")(
+    { type: "agent_settled" },
+    harness.ctx,
+  );
   assert.equal(
     harness.selectedModels.filter((model) => model === "openai-codex/gpt-5.5")
       .length,
@@ -351,6 +428,18 @@ test("records prompt-safe routing history", async () => {
   await startSession(harness);
 
   await routePrompt(harness, prompt);
+  await finishAgent(harness, {
+    type: "agent_end",
+    messages: [
+      assistantMessage("gpt-5.4-mini", {
+        input: 900,
+        cacheRead: 3_600,
+        output: 180,
+        reasoning: 40,
+        totalTokens: 4_680,
+      }),
+    ],
+  });
 
   const historyPath = join(
     harness.ctx.cwd,
@@ -383,9 +472,16 @@ test("records prompt-safe routing history", async () => {
   assert.equal(rollups.lifetime.prompts, 1);
   assert.equal(rollups.daily[today].prompts, 1);
   assert.equal(rollups.monthly[month].prompts, 1);
-  assert.ok(rollups.lifetime.baselineCostUnits > 0);
-  assert.ok(rollups.lifetime.actualCostUnits > 0);
-  assert.ok(rollups.lifetime.estimatedTokensSaved > 0);
+  assert.equal(rollups.version, 2);
+  assert.equal(rollups.lifetime.turnsMeasured, 1);
+  assert.equal(rollups.lifetime.turnsUsageUnavailable, 0);
+  assert.equal(rollups.lifetime.inputTokens, 900);
+  assert.equal(rollups.lifetime.cacheReadTokens, 3600);
+  assert.equal(rollups.lifetime.outputTokens, 180);
+  assert.equal(rollups.lifetime.reasoningTokens, 40);
+  assert.equal(rollups.lifetime.totalTokens, 4680);
+  assert.equal(rollups.lifetime.estimatedPlanCredits, 0.043965);
+  assert.equal(rollups.lifetime.estimatedTokensSaved, 0);
   assert.equal(rollups.lifetime.tiers.simple, 1);
   assert.equal(rollups.lifetime.sources.fallback, 1);
   assert.equal(rollups.lifetime.promptShapes.action, 1);
@@ -400,8 +496,10 @@ test("records prompt-safe routing history", async () => {
   assert.match(harness.notifications.at(-1).message, /Prompts routed: 1/);
   assert.match(
     harness.notifications.at(-1).message,
-    /Estimated savings: \d+ token-equivalent units \(\d+%\)/,
+    /Usage coverage: 1 measured, 0 unavailable/,
   );
+  assert.match(harness.notifications.at(-1).message, /Input cache-read ratio: 80\.0%/);
+  assert.match(harness.notifications.at(-1).message, /Estimated plan credits:/);
   assert.match(harness.notifications.at(-1).message, /Tiers: simple:1/);
   assert.match(harness.notifications.at(-1).message, /Prompt shapes: action:1/);
 
@@ -418,6 +516,29 @@ test("records prompt-safe routing history", async () => {
   );
   const resetHistory = JSON.parse(readFileSync(historyPath, "utf8"));
   assert.equal(resetHistory.entries.length, 0);
+});
+
+test("marks a settled turn unavailable when Pi provides no usage", async () => {
+  const harness = createHarness(createProjectConfig());
+  await startSession(harness);
+  await routePrompt(harness, "What time is it?");
+  await finishAgent(harness, { type: "agent_end", messages: [] });
+
+  const history = JSON.parse(
+    readFileSync(
+      join(harness.ctx.cwd, ".pi/tokenomy-cache/routing-history.json"),
+      "utf8",
+    ),
+  );
+  const rollups = JSON.parse(
+    readFileSync(
+      join(harness.ctx.cwd, ".pi/tokenomy-cache/telemetry-rollups.json"),
+      "utf8",
+    ),
+  );
+  assert.equal(history.entries[0].usageStatus, "unavailable");
+  assert.equal(rollups.lifetime.turnsMeasured, 0);
+  assert.equal(rollups.lifetime.turnsUsageUnavailable, 1);
 });
 
 test("bypasses non-English prompts transparently", async () => {
@@ -453,8 +574,18 @@ test("routes English instructions that contain non-English payload text", async 
   assert.match(harness.notifications.at(-1).message, /Tokenomy:/);
 });
 
-test("learns package commands and injects relevant memory automatically", async () => {
-  const cwd = createProjectConfig();
+test("learns package commands and injects relevant memory when opted in", async () => {
+  const cwd = createProjectConfig({
+    memory: {
+      enabled: true,
+      inject: true,
+      maxFacts: 80,
+      maxInjectedChars: 1200,
+      maxFactChars: 240,
+      staleAfterDays: 30,
+      minContextTokensForInjection: 20_000,
+    },
+  });
   writeFileSync(
     join(cwd, "package.json"),
     `${JSON.stringify(
@@ -522,7 +653,17 @@ test("learns package commands and injects relevant memory automatically", async 
 });
 
 test("injects release workflow memory for vague release prompts", async () => {
-  const cwd = createProjectConfig();
+  const cwd = createProjectConfig({
+    memory: {
+      enabled: true,
+      inject: true,
+      maxFacts: 80,
+      maxInjectedChars: 1200,
+      maxFactChars: 240,
+      staleAfterDays: 30,
+      minContextTokensForInjection: 20_000,
+    },
+  });
   mkdirSync(join(cwd, ".github/workflows"), { recursive: true });
   writeFileSync(
     join(cwd, ".github/workflows/npm-publish.yml"),
@@ -548,7 +689,17 @@ test("injects release workflow memory for vague release prompts", async () => {
 });
 
 test("does not inject memory for simple shell prompts", async () => {
-  const cwd = createProjectConfig();
+  const cwd = createProjectConfig({
+    memory: {
+      enabled: true,
+      inject: true,
+      maxFacts: 80,
+      maxInjectedChars: 1200,
+      maxFactChars: 240,
+      staleAfterDays: 30,
+      minContextTokensForInjection: 0,
+    },
+  });
   writeFileSync(
     join(cwd, "package.json"),
     `${JSON.stringify({ name: "tokenomy-memory-fixture", scripts: { test: "node --test" } })}\n`,
@@ -960,12 +1111,33 @@ test("ignores corrupted classifier cache and still routes", async () => {
     harness.notifications.at(-1).message,
     /Tokenomy: complex via classifier -> openai-codex\/gpt-5\.5, thinking:medium/,
   );
+  await finishAgent(harness, {
+    type: "agent_end",
+    messages: [assistantMessage("gpt-5.5")],
+  });
+  const rollups = JSON.parse(
+    readFileSync(
+      join(harness.ctx.cwd, ".pi/tokenomy-cache/telemetry-rollups.json"),
+      "utf8",
+    ),
+  );
+  assert.equal(rollups.lifetime.classifierInputTokens, 320);
+  assert.equal(rollups.lifetime.classifierOutputTokens, 24);
+  assert.equal(rollups.lifetime.classifierTotalTokens, 344);
+  assert.equal(rollups.lifetime.classifierEstimatedPlanCredits, 0.008712);
 
   delete process.env.TOKENOMY_TEST_CLASSIFIER_RESPONSE;
 });
 
 test("injects a compact project digest for large contexts", async () => {
-  const cwd = createProjectConfig();
+  const cwd = createProjectConfig({
+    distillation: {
+      enabled: true,
+      minContextTokens: 80_000,
+      repeatPromptThreshold: 3,
+      maxDigestChars: 1200,
+    },
+  });
   mkdirSync(join(cwd, ".pi/tokenomy-cache"), { recursive: true });
   writeFileSync(
     join(cwd, ".pi/tokenomy-cache/project-digest.json"),
@@ -1501,8 +1673,14 @@ test("writes opt-in debug trace entries with raw session data", async () => {
     harness,
     "Please explain Tokenomy debug trace marker raw-prompt-123 in one sentence.",
   );
-  await finishAgent(harness, "after_agent_end", {
-    output: "raw output marker 456",
+  await finishAgent(harness, {
+    type: "agent_end",
+    messages: [
+      {
+        ...assistantMessage("gpt-5.4-mini"),
+        content: [{ type: "text", text: "raw output marker 456" }],
+      },
+    ],
   });
 
   const entries = readDebugEntries(cwd);
@@ -1572,6 +1750,22 @@ test("adds command output condensation guidance to the system prompt", async () 
     result.systemPrompt,
     /When command output is long, locally condense it before reasoning/,
   );
+});
+
+test("keeps default system-prompt additions stable across equivalent turns", async () => {
+  const harness = createHarness(createProjectConfig());
+  await startSession(harness);
+
+  const first = await routePrompt(harness, "What time is it?");
+  await finishAgent(harness, {
+    type: "agent_end",
+    messages: [assistantMessage("gpt-5.4-mini")],
+  });
+  const second = await routePrompt(harness, "What time is it?");
+
+  assert.equal(second.systemPrompt, first.systemPrompt);
+  assert.doesNotMatch(second.systemPrompt, /saved tokens so far/i);
+  assert.doesNotMatch(second.systemPrompt, /compact project digest is active/i);
 });
 
 test("toggles dry-run from the tokenomy command", async () => {

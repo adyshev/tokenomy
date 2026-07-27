@@ -26,12 +26,18 @@
   },
   "memory": {
     "enabled": true,
-    "inject": true,
+    "inject": false,
     "maxFacts": 80,
     "maxInjectedChars": 1200,
     "maxFactChars": 240,
     "staleAfterDays": 30,
     "minContextTokensForInjection": 20000
+  },
+  "distillation": {
+    "enabled": false,
+    "minContextTokens": 80000,
+    "repeatPromptThreshold": 3,
+    "maxDigestChars": 1200
   },
   "tools": {
     "manage": false,
@@ -40,7 +46,8 @@
     "writeTools": ["read", "grep", "find", "ls", "edit", "write", "bash"]
   },
   "routing": {
-    "restoreModelAfterPrompt": true
+    "restoreModelAfterPrompt": true,
+    "restoreThinkingAfterPrompt": true
   },
   "promptDiscipline": {
     "enabled": true,

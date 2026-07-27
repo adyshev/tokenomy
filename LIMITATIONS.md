@@ -43,11 +43,28 @@ selected agent model. Compression can still theoretically affect routing if the
 classifier interprets the compacted excerpt differently, so it can be disabled
 with `promptSimplification.compressionEnabled: false`.
 
-## Estimated Savings
+## Usage and Plan Credits
 
-Token savings are estimates. Tokenomy does not read provider billing data or
-exact hidden reasoning usage. The lifetime counter is useful for directionality,
-not accounting.
+Tokenomy records provider-reported usage from Pi's `agent_end` messages:
+input, cached input, cache writes, output, optional reasoning, total tokens,
+requests, and Pi-reported cost. A settled turn with no usable provider data is
+marked `unavailable` instead of being estimated from prompt characters.
+
+The ChatGPT plan-credit conversion is still an estimate. It uses a versioned
+local copy of the OpenAI Codex rate card and may become stale when OpenAI
+changes plan pricing or model IDs. Reports cover only Tokenomy turns in the
+current Pi project; they are not account-wide quota or billing reports.
+
+Telemetry created before schema version 2 may contain model-rank-based
+`estimatedTokensSaved` and cost-unit fields. These are retained for migration
+but labeled as legacy proxies, never as measured tokens or credits.
+
+## Quality Measurement
+
+Tokenomy does not yet have a task-success evaluation loop. Routing reports
+usage and route distribution, but they cannot yet prove that a cheaper route
+avoided retries or preserved task quality. Cost-per-success evaluation remains
+required before making causal savings claims.
 
 ## Model Availability
 
@@ -66,5 +83,6 @@ config still lives in `.pi/tokenomy.json`.
 ## Test Environment
 
 Tests use a mocked Pi runtime and local Pi package resolution. They verify
-routing logic, but they do not perform live model calls or end-to-end terminal
-UI assertions.
+routing logic, current `agent_end`/`agent_settled` behavior, measured usage
+aggregation, and state restoration. They do not perform live model calls,
+account-limit integration, or end-to-end terminal UI assertions.
