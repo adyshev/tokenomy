@@ -137,7 +137,16 @@ jobs:
           fi
 
           npm dist-tag add "$package@$version" latest
-          test "$(npm view "$package@latest" version)" = "$version"
+          actual_latest=""
+          for tag_attempt in 1 2 3 4 5 6; do
+            actual_latest="$(npm view "$package@latest" version 2>/dev/null || true)"
+            if [[ "$actual_latest" = "$version" ]]; then
+              break
+            fi
+            echo "npm latest has not propagated $version yet (attempt $tag_attempt/6)"
+            sleep $((tag_attempt * 5))
+          done
+          test "$actual_latest" = "$version"
 
       - name: Create and push release tag
         if: steps.verify.outputs.published == 'true'
