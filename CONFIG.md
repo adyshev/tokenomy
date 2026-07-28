@@ -11,6 +11,10 @@ The bundled `.pi/tokenomy.schema.json` can be associated with either file in
 an editor. At runtime, malformed values keep the last valid/default value, and
 unknown keys are ignored with a warning. Run `/tokenomy doctor` after changes.
 
+Commands such as `/tokenomy mode save`, `/tokenomy off`, and
+`/tokenomy memory on` change only the current Pi process. Use these config files
+for persistent behavior, then run `/tokenomy reload` or restart Pi.
+
 ## Top-Level Options
 
 | Option | Type | Default | Description |
@@ -53,6 +57,11 @@ lists contain suitable provider-qualified IDs. `autoDiscoverModels` lets
 Tokenomy use Pi's live available-model catalog when configured tier models are
 missing; it is off by default because catalog cost metadata and model
 capability ordering vary by provider.
+
+The shipped provider, tier ordering, and rate card are live-tested only with
+ChatGPT Plus through Pi's `openai-codex` provider. ChatGPT Pro and other
+providers are not part of the supported configuration, even though the schema
+allows explicit experimentation.
 
 ## Thinking
 
@@ -450,6 +459,10 @@ system prompt only when it is likely to save repeated discovery or tool calls.
 Simple shell prompts such as `ls -l` do not receive memory. Stale facts older
 than `staleAfterDays` are skipped. Memory never rewrites the user prompt, and
 the injected block says that the current user prompt overrides memory.
+
+`/tokenomy memory on` enables both learning and injection for the current Pi
+process; `/tokenomy memory off` disables learning for that process. Set
+`enabled` and `inject` here when the choice should persist.
 
 ## Distillation
 

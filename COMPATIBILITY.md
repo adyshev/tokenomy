@@ -7,7 +7,7 @@ Tokenomy currently targets a narrow environment by design.
 - Pi packages `@earendil-works/pi-ai` and
   `@earendil-works/pi-coding-agent` version `0.82.x` (typechecked against
   `0.82.1`)
-- `pi install npm:tokenomy-pi@beta` for the current prerelease
+- `pi install npm:tokenomy-pi` for the current supported npm release
 - `pi install https://github.com/adyshev/tokenomy`
 - Node.js 22.19 or newer
 - ChatGPT Plus Codex authenticated in Pi (live-tested)

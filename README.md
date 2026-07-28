@@ -8,13 +8,14 @@ subscription scope; the project makes no Pro compatibility claim.
 This package is a **Pi extension**, not a native OpenAI Codex CLI extension.
 It depends on Pi's extension lifecycle and uses Pi's `openai-codex` provider.
 
-Tokenomy is designed to reduce total token spend during normal project work
-without forcing you to manually choose a model for every prompt.
+Tokenomy is designed to reduce estimated ChatGPT plan-credit consumption and
+avoidable context/tool tokens during normal project work, without forcing you
+to manually choose a model for every prompt.
 
 The product goal is:
 
-> Spend fewer tokens while preserving the original prompt intent and the quality
-> of the final answer.
+> Use the available Plus plan capacity more efficiently while preserving the
+> original prompt intent and the quality of the final answer.
 
 After installation, Tokenomy runs automatically before each agent turn. It
 classifies the prompt, chooses the cheapest Codex model tier that should still
@@ -95,7 +96,9 @@ Tokenomy's shipped defaults remain focused on one well-defined setup:
   only as an experimental configuration surface through provider-qualified
   model IDs and an explicit allowlist; the project does not ship or test their
   routing tiers or rate cards.
-- Project-local routing through `.pi/extensions/tokenomy/index.ts`.
+- A Pi package whose extension entry point is
+  `.pi/extensions/tokenomy/index.ts`. Configuration, memory, cache, and
+  telemetry remain project-local even when the package is installed globally.
 - Local-only memory, cache, telemetry, and compression. No external database or
   external memory API is used.
 - Local routing signals for English, Ukrainian, Russian, Spanish, French,
@@ -114,6 +117,7 @@ for Codex models available to ChatGPT Plus users through Pi.
 - `.pi/tokenomy.json` — project configuration
 - `.pi/tokenomy.schema.json` — editor/validation schema
 - `INSTALL.md` — install and update instructions
+- `USAGE.md` — standard end-user workflow and feature walkthrough
 - `CONFIG.md` — full configuration reference
 - `LIMITATIONS.md` — known limitations and beta caveats
 - `EVALUATION.md` — reproducible methodology and latest signed-in evidence
@@ -125,16 +129,18 @@ for Codex models available to ChatGPT Plus users through Pi.
 See `INSTALL.md` for full setup steps. The short version is:
 
 ```bash
-pi install npm:tokenomy-pi@beta
+pi install npm:tokenomy-pi
 ```
 
 For project-local install:
 
 ```bash
-pi install -l npm:tokenomy-pi@beta
+pi install -l npm:tokenomy-pi
 ```
 
 Then authenticate Codex in Pi and start Pi from the target project.
+The unqualified npm package is the supported default shown by pi.dev. See
+`USAGE.md` for a complete first-session workflow.
 
 Start Pi in this directory:
 
@@ -198,6 +204,10 @@ Useful commands inside Pi:
 /tokenomy data purge all
 /tokenomy doctor
 ```
+
+Runtime controls such as `/tokenomy on|off`, `/tokenomy mode ...`,
+`/tokenomy dry-run on|off`, and `/tokenomy memory on|off` affect the current Pi
+process only. Edit the global or project config for persistent behavior.
 
 `/tokenomy status` shows the current routing state, last decision, accounting
 mode, and the plan rate-card version.
@@ -340,11 +350,13 @@ the cheapest model even when the current project context is large. The trivial
 path is not used when the prompt mentions project files, logs, tests, code, or
 tool work.
 
-Tokenomy currently supports English routing instructions only. If a prompt is
-primarily written in another language, Tokenomy bypasses routing transparently
-and leaves the current Pi model/tool state unchanged. English instructions may
-still include non-English text as payload, such as text to translate or a code
-comment to preserve.
+Tokenomy has local routing dictionaries for English, Ukrainian, Russian,
+Spanish, French, German, and Portuguese. These cover common coding-agent
+phrases rather than every dialect or wording. A language removed from
+`languages.enabled`, or a prompt primarily written in an unknown script,
+bypasses routing for that turn and leaves the current Pi model/tool state
+unchanged. Supported instructions may still include other-language text as
+payload, such as text to translate or a code comment to preserve.
 
 For ambiguous prompts, Tokenomy can ask the cheapest configured classifier model
 for a tiny JSON decision. The classifier is only accepted when its confidence is
