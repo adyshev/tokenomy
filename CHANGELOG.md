@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.0-beta.4 - 2026-07-28
+
+- Made the unqualified `pi install npm:tokenomy-pi` command the documented
+  install and update path, matching pi.dev and the supported npm default
+  channel.
+- Added a standalone standard usage scenario covering setup, route
+  explanations, quality feedback, reports, budgets, memory, compaction,
+  project-local data controls, and updates.
+- Corrected stale scope and language guidance: generated data remains
+  project-local, supported routing dictionaries cover seven languages, and
+  runtime control commands do not persist configuration changes.
+- Included the new usage guide in the npm package and added regression coverage
+  for public installation guidance.
+
 ## 0.2.0-beta.3 - 2026-07-27
 
 - Kept npm `beta` as the prerelease channel while also moving `latest` to the

@@ -48,6 +48,20 @@ test("package manifest declares Tokenomy as an installable Pi extension", () => 
   assert.equal(manifest.scripts["test:package"], "node scripts/package-smoke.mjs");
   assert.ok(manifest.files.includes(".pi/extensions/tokenomy"));
   assert.ok(manifest.files.includes(".pi/tokenomy.schema.json"));
+  assert.ok(manifest.files.includes("USAGE.md"));
+});
+
+test("public user guides use the normal npm install channel", () => {
+  for (const path of [
+    "README.md",
+    "INSTALL.md",
+    "USAGE.md",
+    "COMPATIBILITY.md",
+  ]) {
+    const guide = readFileSync(path, "utf8");
+    assert.match(guide, /pi install (?:-l )?npm:tokenomy-pi/);
+    assert.doesNotMatch(guide, /npm:tokenomy-pi@beta/);
+  }
 });
 
 test("live evaluation stays explicitly opt-in", () => {

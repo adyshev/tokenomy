@@ -2,9 +2,9 @@
 
 Tokenomy is distributed as a Pi package (not a native Codex CLI extension).
 After installation, it routes prompts through Pi's `openai-codex` provider to
-cheaper models when safe, upshifts for risky work,
-and uses local project memory plus prompt compression to reduce repeated token
-spend without changing the final user prompt.
+cheaper models when safe, upshifts for risky work, and uses local project
+memory plus prompt compression to reduce estimated plan-credit consumption and
+avoidable context tokens without changing the final user prompt.
 
 ## Requirements
 
@@ -21,14 +21,17 @@ scope. It may work, but Tokenomy currently makes no Pro compatibility claim.
 Recommended npm install:
 
 ```bash
-pi install npm:tokenomy-pi@beta
+pi install npm:tokenomy-pi
 ```
 
 Project-local npm install:
 
 ```bash
-pi install -l npm:tokenomy-pi@beta
+pi install -l npm:tokenomy-pi
 ```
+
+The unqualified package is the normal supported install and update path shown
+on pi.dev.
 
 GitHub install also works:
 
@@ -51,11 +54,14 @@ pi install git:git@github.com:adyshev/tokenomy
 For a pinned release or commit:
 
 ```bash
-pi install https://github.com/adyshev/tokenomy@v0.2.0-beta.3
+pi install https://github.com/adyshev/tokenomy@v0.2.0-beta.4
 ```
 
 `pi install` reads the `pi` manifest from `package.json` and enables the
-Tokenomy extension declared there.
+Tokenomy extension declared there. A normal install makes the package available
+to Pi generally; `-l` limits the package registration to the current project.
+In both cases, Tokenomy's generated state and project config stay under the
+project's `.pi/` directory.
 
 ## Project Config
 
@@ -75,6 +81,8 @@ Example project config:
 ```
 
 See `CONFIG.md` for all options.
+For a guided first session, routing examples, feedback, reports, budgets,
+memory, and compaction, see `USAGE.md`.
 
 ## Manual Development Install
 
@@ -123,6 +131,10 @@ Inside Pi, run:
 
 You should see Tokenomy enabled, the configured provider, and the last routing
 decision once you send a prompt.
+
+Commands that change routing mode, enabled state, dry-run, debug, or memory
+state apply to the current Pi process. Put the equivalent option in
+`~/.pi/agent/tokenomy.json` or `.pi/tokenomy.json` when it should persist.
 
 ## Disable
 

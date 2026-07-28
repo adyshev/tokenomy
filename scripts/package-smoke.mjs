@@ -71,6 +71,7 @@ const required = [
   ".pi/extensions/tokenomy/lib/models.ts",
   ".pi/tokenomy.json",
   ".pi/tokenomy.schema.json",
+  "USAGE.md",
   "EVALUATION.md",
   "scripts/live-evaluation.mjs",
   "scripts/economic-evaluation.mjs",

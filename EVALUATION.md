@@ -21,7 +21,7 @@ zero. Evidence includes Wilson 95% confidence intervals, classifier-inclusive
 and classifier-disabled arms, all individual runs, and optional changes from a
 previous evidence file.
 
-## 0.2.0-beta.1 Plus evaluation
+## Recorded Plus evidence: 0.2.0-beta.1
 
 Date: 2026-07-27
 
@@ -30,6 +30,9 @@ Pi API/runtime line: 0.82.1
 Subscription tested: ChatGPT Plus
 
 Fixed comparison model: `openai-codex/gpt-5.6-sol`
+
+This section records a specific historical run; it is not a certification of
+every later patch, model-catalog change, or user workload.
 
 The live suite passed its simple-answer, focused-fix, and multi-step-quality
 checks. Tokenomy routed those tasks to Mini, Terra, and Sol respectively, and

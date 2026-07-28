@@ -1,6 +1,6 @@
 {
   "name": "tokenomy-pi",
-  "version": "0.2.0-beta.3",
+  "version": "0.2.0-beta.4",
   "description": "Automatic token-saving router for the Pi CLI using Pi's openai-codex provider, with visible local usage and quality evidence.",
   "license": "MIT",
   "type": "module",
@@ -20,6 +20,7 @@
     ".pi/tokenomy.schema.json",
     "README.md",
     "INSTALL.md",
+    "USAGE.md",
     "CONFIG.md",
     "COMPATIBILITY.md",
     "LIMITATIONS.md",
